@@ -1,0 +1,8 @@
+[package]
+name = "features-core"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# no_std-compatible — no external deps beyond libm
+libm = "0.2"

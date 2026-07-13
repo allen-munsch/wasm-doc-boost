@@ -1,0 +1,12 @@
+[package]
+name = "py-features"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "py_features"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.23", features = ["extension-module"] }
+features-core = { path = "../features-core" }
