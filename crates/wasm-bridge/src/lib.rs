@@ -177,6 +177,6 @@ mod tests {
     fn test_feature_count() {
         let pixels = vec![128u8; 64 * 64 * 3];
         let feats = extract_all(&pixels, 64, 64);
-        assert_eq!(feats.len(), 78, "expected 78 features, got {}", feats.len());
+        assert_eq!(feats.len(), 81, "expected 81 features, got {}", feats.len());
     }
 }

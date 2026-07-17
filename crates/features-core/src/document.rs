@@ -181,6 +181,12 @@ pub fn document_features(pixels: &[u8], width: usize, height: usize) -> Vec<f64>
         0.0
     };
 
+    // Horizontal run-length stats: documents have long horizontal text lines
+    let (h_run_mean, h_run_std) = horizontal_run_length_stats(&binary, width, height);
+
+    // Vertical projection: documents have high row-foreground variance (text/blank rows)
+    let v_proj_std = vertical_projection_std(&binary, width, height);
+
     // Simplified Hough: count dominant lines via accumulator peaks
     let hough_lines = simplified_hough(&binary, width, height);
 
@@ -192,9 +198,71 @@ pub fn document_features(pixels: &[u8], width: usize, height: usize) -> Vec<f64>
         median_aspect,
         median_stroke,
         pct_small_aspect,
+        h_run_mean,
+        h_run_std,
+        v_proj_std,
         hough_lines,
         sat_ratio,
     ]
+}
+
+/// Mean and std of horizontal run lengths of foreground pixels.
+/// Documents have long horizontal text lines; natural images have shorter,
+/// more irregular runs.
+fn horizontal_run_length_stats(
+    binary: &[bool],
+    width: usize,
+    height: usize,
+) -> (f64, f64) {
+    let mut run_lengths: Vec<f64> = Vec::new();
+    for y in 0..height {
+        let row_start = y * width;
+        let mut run_start: Option<usize> = None;
+        for x in 0..width {
+            if binary[row_start + x] {
+                if run_start.is_none() {
+                    run_start = Some(x);
+                }
+            } else if let Some(start) = run_start {
+                run_lengths.push((x - start) as f64);
+                run_start = None;
+            }
+        }
+        if let Some(start) = run_start {
+            run_lengths.push((width - start) as f64);
+        }
+    }
+    if run_lengths.is_empty() {
+        return (0.0, 0.0);
+    }
+    let n = run_lengths.len() as f64;
+    let mean = run_lengths.iter().sum::<f64>() / n;
+    let variance = run_lengths.iter().map(|&x| (x - mean) * (x - mean)).sum::<f64>() / n;
+    (mean, libm::sqrt(variance))
+}
+
+/// Standard deviation of foreground pixel counts per row.
+/// Documents have high variance: text rows have many foreground pixels,
+/// blank rows have few. Natural images have more uniform rows.
+fn vertical_projection_std(binary: &[bool], width: usize, height: usize) -> f64 {
+    if height == 0 {
+        return 0.0;
+    }
+    let mut row_counts = vec![0.0f64; height];
+    let mut total = 0.0f64;
+    for y in 0..height {
+        let row_start = y * width;
+        let count = binary[row_start..row_start + width]
+            .iter()
+            .filter(|&&b| b)
+            .count() as f64;
+        row_counts[y] = count;
+        total += count;
+    }
+    let mean = total / height as f64;
+    let variance =
+        row_counts.iter().map(|&c| (c - mean) * (c - mean)).sum::<f64>() / height as f64;
+    libm::sqrt(variance)
 }
 
 /// Median of a slice.
@@ -357,7 +425,7 @@ mod tests {
     #[test]
     fn document_features_solid() {
         let f = document_features(&solid_128(32, 32), 32, 32);
-        assert_eq!(f.len(), 6);
+        assert_eq!(f.len(), 9);
         // Solid gray: no foreground after Otsu
         assert!(f[0] < 10.0); // few components
     }
