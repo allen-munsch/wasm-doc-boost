@@ -210,7 +210,7 @@
   </div>
 
   <!-- ── OCR Results ── -->
-  <div class="card" style="display:none" id="ocr-card">
+   <div class="card" style="display:none" id="ocr-card">
     <h3>&#x1F4DD; OCR</h3>
     <div style="margin-bottom:6px">
       <textarea id="ocr-prompt" rows="2" style="width:100%;box-sizing:border-box;background:rgba(255,255,255,0.06);border:1px solid var(--border);color:var(--fg);border-radius:4px;padding:6px;font-size:0.7rem;resize:vertical;font-family:inherit" placeholder="GLM-OCR prompt…"></textarea>
@@ -267,12 +267,10 @@ window.addEventListener('unhandledrejection', e => {
 });
 
 import init, { load_model, classify_file } from './wasm_bridge.js';
-import { env, AutoProcessor, GlmOcrForConditionalGeneration } from './vendor/transformers/transformers.web.min.js';
 
-// ── ORT config ───────────────────────────────────────
-// Importmap routes onnxruntime-* → standalone ort.bundle.min.mjs (JSEP, 397KB).
-// Bundle finds ort-wasm-simd-threaded.jsep.* via relative import in same dir.
-env.allowLocalModels = true;
+// ── GLM-OCR backend ──────────────────────────────────
+const GLM_BACKEND_URL = 'http://localhost:8765';
+let glmBackendAvailable = false;
 
 // ── DOM refs ─────────────────────────────────────────
 const $ = (s) => document.querySelector(s);
@@ -318,7 +316,6 @@ let currentBlob = null;
 let redactions = [], drawingRedaction = false, drawStart = null, redactMode = false;
 let modelLoaded = false;
 let tessReady = false, tessWorker = null;
-let glmReady = false, glmModel = null, glmProcessor = null;
 
 // ── Stage helpers ────────────────────────────────────
 function setStage(el, text, cls) {
@@ -358,88 +355,18 @@ async function initTesseract() {
   setStage(stageTess, 'Ready', 'ok');
 }
 
-// ── GLM-OCR init ─────────────────────────────────────
-// Backend config — defaults to WASM CPU + fp16 (~2.1GB RAM).
-// Switch to WebGPU + q4f16 (~628MB VRAM) if you have a GPU with enough memory.
-//     GLM_BACKEND.device = 'webgpu'; GLM_BACKEND.dtype = 'q4f16';
-const GLM_MODEL = '/vendor/glm-ocr-onnx/';
-const GLM_BACKEND = {
-  // 'wasm' (CPU, fp16, standard ops) | 'webgpu' (GPU, q4f16, GatherBlockQuantized) | 'auto'
-  device: 'auto',
-  // 'fp16' (CPU-safe, ~2.1GB) | 'q4f16' (WebGPU only, ~628MB)
-  dtype: 'fp16',
-  // Session options
-  session_options: { enableMemoryPattern: false, logSeverityLevel: 2 },
-};
-
-async function initGlmOcr() {
-  setStage(stageGlm, 'Loading…', 'busy');
-
-  const gpuAvailable = navigator.gpu && (await navigator.gpu.requestAdapter().catch(() => null));
-
-  let device = GLM_BACKEND.device === 'auto'
-    ? (gpuAvailable ? 'webgpu' : 'wasm')
-    : GLM_BACKEND.device;
-
-  let dtype = device === 'webgpu' ? 'q4f16' : GLM_BACKEND.dtype;
-  console.error(`[glm] trying device=${device} dtype=${dtype} gpuAvailable=${!!gpuAvailable}`);
-
-  glmMiniProg.style.display = 'block';
-  glmMiniFill.style.width = '0%';
-  glmMiniFill.className = 'mini-progress-fill';
-
-  const progress_cb = (info) => {
-    if (info.status === 'progress') {
-      const pct = info.progress || 0;
-      glmMiniFill.style.width = Math.round(pct) + '%';
-      if (info.file) setStage(stageGlm, `Loading ${info.file}…`, 'busy');
-    } else if (info.status === 'download') {
-      setStage(stageGlm, `Downloading ${info.file}…`, 'busy');
-    }
-  };
-
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      setStage(stageGlm, 'Loading processor…', 'busy');
-      glmProcessor = await AutoProcessor.from_pretrained(GLM_MODEL, {
-        progress_callback: progress_cb,
-        local_files_only: true,
-      });
-
-      setStage(stageGlm, `Loading model (${device}/${dtype})…`, 'busy');
-      glmMiniFill.style.width = '5%';
-
-      glmModel = await GlmOcrForConditionalGeneration.from_pretrained(GLM_MODEL, {
-        device,
-        dtype,
-        session_options: GLM_BACKEND.session_options,
-        progress_callback: progress_cb,
-        local_files_only: true,
-      });
-
-      // Success
-      glmReady = true;
-      window.glmReady = true;
-      window.glmModel = glmModel;
-      window.glmProcessor = glmProcessor;
-      window.glmBackend = { device, dtype };
-
-      glmMiniFill.style.width = '100%';
-      glmMiniFill.className = 'mini-progress-fill done';
-      setStage(stageGlm, `Ready (${device}/${dtype})`, 'ok');
+// ── GLM-OCR backend health check ─────────────────────
+async function checkGlmBackend() {
+  try {
+    const r = await fetch(`${GLM_BACKEND_URL}/health`, { signal: AbortSignal.timeout(3000) });
+    if (r.ok) {
+      glmBackendAvailable = true;
+      setStage(stageGlm, 'Backend ready', 'ok');
       return;
-    } catch (e) {
-      console.error(`[glm] attempt ${attempt + 1} (${device}/${dtype}) failed:`, e?.message || e);
-      if (attempt === 0 && device === 'webgpu') {
-        // WebGPU OOM — fall back to wasm/fp16
-        device = 'wasm';
-        dtype = 'fp16';
-        setStage(stageGlm, 'Retrying with wasm/fp16…', 'busy');
-        continue;
-      }
-      throw e;
     }
-  }
+  } catch {}
+  glmBackendAvailable = false;
+  setStage(stageGlm, 'Backend unreachable', 'err');
 }
 
 // ── Full init cascade ────────────────────────────────
@@ -449,22 +376,15 @@ async function initAll() {
   } catch (e) {
     setStage(stageWasm, `Failed: ${e?.message || e}`, 'err');
     console.error('WASM init failed:', e);
-    // Don't throw — Tesseract and GLM can still work
   }
 
-  // Start Tesseract and GLM-OCR in parallel
   const tessP = initTesseract().catch(e => {
     setStage(stageTess, 'Failed', 'err');
     console.error('Tesseract init failed:', e);
     return null;
   });
 
-  const glmP = initGlmOcr().catch(e => {
-    setStage(stageGlm, `Failed: ${e?.message || String(e)}`, 'err');
-    window.glmLoadError = e?.message || String(e);
-    console.error('GLM-OCR init failed:', e);
-    return null;
-  });
+  const glmP = checkGlmBackend();
 
   await Promise.all([tessP, glmP]);
 }
@@ -494,7 +414,7 @@ async function handleFile(file) {
   } catch (e) {
     scoresCont.innerHTML = '<span style="color:var(--accent)">Classification failed</span>';
     console.error('Classify error:', e);
-    if (tessReady || glmReady) scoresCont.innerHTML += '<br><span style="font-size:0.68rem">OCR may still work</span>';
+    if (tessReady || glmBackendAvailable) scoresCont.innerHTML += '<br><span style="font-size:0.68rem">OCR may still work</span>';
     else return;
     scores = null;
   }
@@ -560,9 +480,9 @@ function parseHocrWords(hocr) {
 }
 
 // ── OCR: Tesseract + GLM-OCR in parallel ─────────────
-const DEFAULT_GLM_PROMPT = 'Read all the text in the image. For every word, output a JSON array where each entry has the format {"text": "<word>", "bbox": [x1, y1, x2, y2]}. The coordinates are normalized to the range [0, 1000], where (0,0) is top‑left and (1000,1000) is bottom‑right. Reply ONLY with the JSON array, nothing else.';
+const DEFAULT_GLM_PROMPT = 'Text Recognition:';
 
-async function runOcr(customPrompt) {
+async function runOcr() {
   ocrCard.style.display = 'block';
   if (!currentBytes) return;
 
@@ -591,78 +511,97 @@ async function runOcr(customPrompt) {
     tessText.textContent = tessReady === false ? 'Not available (init failed).' : 'Not available.';
   }
 
-  if (glmReady && glmModel && glmProcessor) {
+  if (glmBackendAvailable) {
     ocrTasks.push((async () => {
       glmText.textContent = 'Running…';
       try {
-        const imageUrl = URL.createObjectURL(currentBlob);
-        // Wait for the image to load before passing to processor
+        // Wait for the image to load
         if (!mainImage.complete || !mainImage.naturalWidth) {
           await new Promise(resolve => mainImage.addEventListener('load', resolve, { once: true }));
         }
-        const promptText = (customPrompt || ocrPrompt.value || DEFAULT_GLM_PROMPT).trim();
-        const messages = [
-          { role: 'user', content: [
-            { type: 'image', image: imageUrl },
-            { type: 'text', text: promptText },
-          ]}
-        ];
-        const prompt = glmProcessor.apply_chat_template(messages, { add_generation_prompt: true });
-        const inputs = await glmProcessor(prompt, { images: [imageUrl] });
+        const promptText = (ocrPrompt.value || DEFAULT_GLM_PROMPT).trim();
+
+        // Convert image to base64 via canvas
+        const cv = document.createElement('canvas');
+        cv.width = mainImage.naturalWidth;
+        cv.height = mainImage.naturalHeight;
+        cv.getContext('2d').drawImage(mainImage, 0, 0);
+        const imageB64 = cv.toDataURL('image/jpeg', 0.85).split(',')[1];
 
         const t0 = performance.now();
-        const generated = await glmModel.generate({
-          ...inputs,
-          max_new_tokens: 2048,
-          temperature: 0,
-          top_p: 1.0,
-          do_sample: false,
-          repetition_penalty: 1.0,
+        const r = await fetch(`${GLM_BACKEND_URL}/ocr`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ image: imageB64, prompt: promptText }),
         });
+        if (!r.ok) throw new Error(`Backend ${r.status}: ${await r.text()}`);
+        const data = await r.json();
         const elapsed = Math.round(performance.now() - t0);
 
-        let output = '';
-        if (generated && generated.length > 0) {
-          const promptLen = inputs.input_ids?.dims?.at(-1) || 0;
-          const fullIds = Array.from(generated[0].input_ids?.data || generated[0]);
-          const newIds = fullIds.slice(promptLen);
-          output = glmProcessor.tokenizer.decode(newIds, { skip_special_tokens: true }).trim();
-        }
-
-        // Try to parse as JSON; if not, wrap as plain text
-        let parsed;
-        try { parsed = JSON.parse(output); } catch { parsed = { text: output }; }
-
-        // Convert 0-1000 coords to pixel values if words with bbox present
-        if (Array.isArray(parsed) && parsed[0]?.bbox && mainImage.naturalWidth) {
-          const scaleX = mainImage.naturalWidth / 1000;
-          const scaleY = mainImage.naturalHeight / 1000;
-          parsed = parsed.map(w => {
-            const [x1, y1, x2, y2] = w.bbox;
-            return {
-              text: w.text,
-              bbox: w.bbox,
-              pixel: {
-                x: Math.round(x1 * scaleX),
-                y: Math.round(y1 * scaleY),
-                w: Math.round((x2 - x1) * scaleX),
-                h: Math.round((y2 - y1) * scaleY),
-              }
+        // Display regions with clickable redaction bboxes
+        if (data.regions && Array.isArray(data.regions)) {
+          const regions = data.regions;
+          const sx = mainImage.getBoundingClientRect().width / mainImage.naturalWidth;
+          const sy = mainImage.getBoundingClientRect().height / mainImage.naturalHeight;
+          const piiColors = { PAN:'#dc2626', CVV:'#dc2626', EXPIRY:'#dc2626',
+                              SSN:'#ea580c', PHONE:'#ea580c', EMAIL:'#ea580c',
+                              ROUTING:'#ea580c', ACCOUNT:'#ea580c', DOB:'#ea580c',
+                              ADDRESS:'#f59e0b', NAME:'#f59e0b', ZIP:'#f59e0b' };
+          let anyPii = false;
+          let html = '';
+          for (let i = 0; i < regions.length; i++) {
+            const r = regions[i];
+            const [x1, y1, x2, y2] = r.bbox;
+            // Scan for PII in this region's text
+            let piiHits = [];
+            try { piiHits = scan_pii(r.text); } catch(e) { console.warn('pii scan error:', e); }
+            const piiBadges = piiHits.map(h => {
+              const c = piiColors[h.kind] || '#f59e0b';
+              const label = h.kind === 'ACCOUNT' ? 'BANK' : h.kind;
+              return `<span style="display:inline-block;background:${c};color:#fff;padding:1px 4px;border-radius:3px;font-size:0.6rem;margin:0 2px">${label}: ${h.text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</span>`;
+            }).join('');
+            if (piiHits.length > 0) anyPii = true;
+            const isPii = piiHits.length > 0;
+            html += '<div class="glm-region">'
+              + (piiBadges ? `<div style="margin:2px 0">${piiBadges}</div>` : '')
+              + `<button class="btn-outline btn-sm glm-bbox-btn${isPii ? ' pii-region' : ''}" data-x1="${x1}" data-y1="${y1}" data-x2="${x2}" data-y2="${y2}">`
+              + `&#x25A0; Region ${i+1} [${x1},${y1} ${x2},${y2}]</button>`
+              + `<pre style="margin:4px 0 8px 0;white-space:pre-wrap;font-size:0.7rem">${r.text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</pre>`
+              + '</div>';
+          }
+          glmText.innerHTML = html;
+          // Add auto-redact button if PII found
+          if (anyPii) {
+            const btn = document.createElement('button');
+            btn.className = 'btn-outline btn-sm';
+            btn.style.cssText = 'display:block;margin:8px 0 0 0;background:#dc2626;color:#fff;border-color:#dc2626';
+            btn.textContent = '\u{1F6AB} Auto-Redact All PII';
+            btn.onclick = () => {
+              glmText.querySelectorAll('.pii-region').forEach(b => b.click());
+            };
+            glmText.insertBefore(btn, glmText.firstChild);
+          }
+          glmText.querySelectorAll('.glm-bbox-btn').forEach(btn => {
+            btn.onclick = () => {
+              const rx1 = Math.round(parseFloat(btn.dataset.x1) * sx);
+              const ry1 = Math.round(parseFloat(btn.dataset.y1) * sy);
+              const rx2 = Math.round(parseFloat(btn.dataset.x2) * sx);
+              const ry2 = Math.round(parseFloat(btn.dataset.y2) * sy);
+              redactions.push({ x: rx1, y: ry1, w: rx2 - rx1, h: ry2 - ry1 });
+              updateRedactionList();
+              drawRedactions();
             };
           });
+        } else {
+          glmText.textContent = JSON.stringify(data, null, 2);
         }
-
-        parsed._meta = { engine: `GLM-OCR ${window.glmBackend?.dtype || 'fp16'} (${window.glmBackend?.device || 'wasm'})`, latency_ms: elapsed, prompt_length: promptText.length };
-        glmText.textContent = JSON.stringify(parsed, null, 2);
-        URL.revokeObjectURL(imageUrl);
       } catch (e) {
         glmText.textContent = `GLM-OCR error: ${e?.message || String(e)}`;
         console.error('GLM-OCR error:', e);
-        URL.revokeObjectURL(imageUrl);
       }
     })());
   } else {
-    glmText.textContent = glmReady === false ? 'Not available (init failed).' : 'Not available.';
+    glmText.textContent = 'Backend not available. Start the GLM-OCR server on port 8765.';
   }
 
   await Promise.all(ocrTasks);

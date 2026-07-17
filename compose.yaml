@@ -1,0 +1,37 @@
+# ── wasm-doc-boost compose ─────────────────────────
+# podman-compose up -d        (both services, detached)
+# podman-compose up           (foreground)
+#
+# Quick iteration:
+#   Frontend files at ./frontend/ — edit, refresh browser.
+#   Backend files at ./backend/  — edit, server auto-reloads (--reload).
+#   No rebuild needed.
+#
+# GPU: add to `podman run` or podman-compose:
+#   --device nvidia.com/gpu=all --security-opt=label=disable
+# (or install nvidia-container-toolkit for Docker-style --gpus all)
+services:
+  # ── GLM-OCR backend (GPU-accelerated OCR inference) ──
+  backend:
+    image: localhost/wasm-doc-boost-backend:latest
+    command: server --port 8765 --host 0.0.0.0 --reload
+    network_mode: host
+    devices:
+      - nvidia.com/gpu=all
+    security_opt:
+      - label=disable
+    volumes:
+      - ./backend:/app/backend:z
+      - ./data:/data:z
+      - /home/jm/.cache/huggingface:/hf-cache:z
+    environment:
+      - HF_HOME=/hf-cache
+      - PYTHONPATH=/app
+
+  # ── Frontend (static files + COOP/COEP headers) ──
+  frontend:
+    image: localhost/wasm-doc-boost-backend:latest
+    command: shell -c "python /app/frontend/serve.py 8000"
+    network_mode: host
+    volumes:
+      - ./frontend:/app/frontend:z

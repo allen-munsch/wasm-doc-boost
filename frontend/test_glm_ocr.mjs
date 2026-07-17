@@ -126,6 +126,11 @@ async function main() {
 
   // ── Step 3: Upload image ──
   console.log('\n=== Step 3: Upload image ===');
+
+  // Ensure GLM-OCR init is done before upload (otherwise runOcr sees glmReady=false and skips)
+  await glmP.catch(() => {});
+  dumpErrors();
+
   if (page.isClosed()) {
     console.error('[FAIL] Page closed before upload (GLM OOM crash?)');
   } else {

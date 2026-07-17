@@ -15,6 +15,24 @@ export function classify_file(bytes) {
 }
 
 /**
+ * Load a CRF model for NER-based PII detection.
+ *
+ * The model is used by `scan_pii` to detect ADDRESS, NAME, ACCOUNT
+ * via sequence labeling, ensemble-merged with rule-based scanners.
+ *
+ * Pass an empty string to clear the model.
+ * @param {string} json
+ */
+export function load_crf_model(json) {
+    const ptr0 = passStringToWasm0(json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.load_crf_model(ptr0, len0);
+    if (ret[1]) {
+        throw takeFromExternrefTable0(ret[0]);
+    }
+}
+
+/**
  * @param {string} json
  */
 export function load_model(json) {
@@ -24,6 +42,25 @@ export function load_model(json) {
     if (ret[1]) {
         throw takeFromExternrefTable0(ret[0]);
     }
+}
+
+/**
+ * Scan text for PII/PCI (credit card numbers, SSNs, emails, phones).
+ *
+ * Returns a JavaScript array of hit objects:
+ *   [{kind: "PAN"|"SSN"|"PHONE"|"EMAIL"|"CVV"|"EXPIRY"|"ROUTING"|"ACCOUNT"|"DOB",
+ *     text: "matched string", start: byte_offset, end: byte_offset}, ...]
+ * @param {string} text
+ * @returns {any}
+ */
+export function scan_pii(text) {
+    const ptr0 = passStringToWasm0(text, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.scan_pii(ptr0, len0);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
 }
 function __wbg_get_imports() {
     const import0 = {
@@ -38,8 +75,16 @@ function __wbg_get_imports() {
         __wbg___wbindgen_throw_344f42d3211c4765: function(arg0, arg1) {
             throw new Error(getStringFromWasm0(arg0, arg1));
         },
+        __wbg_new_32b398fb48b6d94a: function() {
+            const ret = new Array();
+            return ret;
+        },
         __wbg_new_da52cf8fe3429cb2: function() {
             const ret = new Object();
+            return ret;
+        },
+        __wbg_push_d2ae3af0c1217ae6: function(arg0, arg1) {
+            const ret = arg0.push(arg1);
             return ret;
         },
         __wbg_set_8535240470bf2500: function() { return handleError(function (arg0, arg1, arg2) {

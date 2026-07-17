@@ -1,0 +1,28 @@
+{
+  "name": "wasm-bridge",
+  "type": "module",
+  "version": "0.1.0",
+  "files": [
+    "wasm_bridge_bg.wasm",
+    "wasm_bridge.js",
+    "wasm_bridge.d.ts"
+  ],
+  "main": "wasm_bridge.js",
+  "types": "wasm_bridge.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ],
+  "description": "",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@huggingface/transformers": "^4.2.0",
+    "onnxruntime-web": "^1.27.0",
+    "playwright": "^1.61.1",
+    "tesseract.js": "^6.0.1"
+  }
+}

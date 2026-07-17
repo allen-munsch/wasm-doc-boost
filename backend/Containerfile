@@ -1,0 +1,114 @@
+# ── wasm-doc-boost backend Containerfile ───────────
+# GPU-accelerated GLM-OCR inference server + GBDT training pipeline.
+#
+# Build:
+#   podman build -t wasm-doc-boost-backend -f backend/Containerfile .
+#
+# Run (server):
+#   podman run --gpus all -p 8765:8765 \
+#     -v ./data:/data:z \
+#     -v $HF_HOME:/hf-cache:z \
+#     -e HF_HOME=/hf-cache \
+#     wasm-doc-boost-backend server --port 8765
+#
+# Run (training):
+#   podman run --gpus all \
+#     -v ./data:/data:z \
+#     wasm-doc-boost-backend train \
+#       --features /data/features.npz \
+#       --output /data/model.json
+#
+# GPU passthrough:
+#   - Docker:  --gpus all  (needs nvidia-container-toolkit)
+#   - Podman:  --device nvidia.com/gpu=all --security-opt=label=disable
+#     (or install nvidia-container-toolkit for --gpus support)
+
+FROM docker.io/nvidia/cuda:12.6.0-runtime-ubuntu24.04
+
+# ── System deps ────────────────────────────────────
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl git build-essential pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── mise (Python version manager) ──────────────────
+ENV MISE_INSTALL_PATH=/usr/local/bin/mise \
+    MISE_DATA_DIR=/mise-data \
+    MISE_CACHE_DIR=/mise-cache \
+    PATH="/root/.local/share/mise/shims:$PATH"
+
+RUN curl -fsSL https://mise.run | sh \
+    && mise --version
+
+# ── uv (Python package installer) ──────────────────
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+# ── Rust toolchain (for py-features crate) ─────────
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+ENV PATH="/root/.cargo/bin:$PATH"
+
+# ── Python via mise ────────────────────────────────
+# Python 3.14+ — adjust to 3.14, 3.15, etc.
+ARG PYTHON_VERSION=3.14
+RUN mise install python@${PYTHON_VERSION} \
+    && mise use -g python@${PYTHON_VERSION} \
+    && PYTHON_DIR="$(mise where python)" \
+    && ln -sf "$PYTHON_DIR/bin/python3" /usr/local/bin/python \
+    && ln -sf "$PYTHON_DIR/bin/pip3" /usr/local/bin/pip
+
+# ── Project deps (layer caching) ───────────────────
+WORKDIR /app
+
+# Python deps first (slowest to change)
+COPY backend/requirements.txt backend/
+# Split torch from pip to let uv handle the CUDA index
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --system \
+    --index-url https://download.pytorch.org/whl/cu126 \
+    torch torchvision torchaudio \
+    && uv pip install --system -r backend/requirements.txt
+
+# Install xgboost + sklearn for training scripts
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --system \
+    xgboost scikit-learn numpy pillow
+
+# ── Rust crate sources (for maturin build) ─────────
+COPY Cargo.toml Cargo.lock* ./
+COPY crates/features-core/Cargo.toml crates/features-core/
+COPY crates/py-features/Cargo.toml crates/py-features/
+COPY crates/py-features/pyproject.toml crates/py-features/
+# Dummy src so cargo fetch works
+RUN mkdir -p crates/features-core/src crates/py-features/src \
+    && echo 'fn main() {}' > crates/features-core/src/lib.rs \
+    && echo 'fn main() {}' > crates/py-features/src/lib.rs \
+    && cargo fetch --manifest-path crates/py-features/Cargo.toml \
+    && rm -rf crates/features-core/src crates/py-features/src
+
+# ── Full source ────────────────────────────────────
+COPY crates/ crates/
+COPY scripts/ scripts/
+COPY backend/ backend/
+
+# Build py-features Rust extension (GPU not needed for this)
+RUN --mount=type=cache,target=/root/.cache/uv \
+    --mount=type=cache,target=/root/.cargo/registry \
+    --mount=type=cache,target=/app/target,sharing=locked \
+    PYTHON_BIN_DIR="$(dirname "$(readlink -f /usr/local/bin/python)")" \
+    && PATH="$PYTHON_BIN_DIR:$PATH" \
+    && export PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 \
+    && uv pip install --system maturin \
+    && cd crates/py-features \
+    && maturin build --release --out /tmp/wheels \
+    && uv pip install --system /tmp/wheels/*.whl \
+    && rm -rf /tmp/wheels
+
+# ── Entrypoint ─────────────────────────────────────
+# Usage:
+#   podman run ... wasm-doc-boost-backend server --port 8765
+#   podman run ... wasm-doc-boost-backend train --features /data/features.npz --output /data/model.json
+#   podman run ... wasm-doc-boost-backend export-features --images /data/images --labels /data/labels.csv --output /data/features.npz
+COPY --chmod=755 backend/entrypoint.sh /usr/local/bin/entrypoint
+ENTRYPOINT ["entrypoint"]
+CMD ["server", "--help"]
