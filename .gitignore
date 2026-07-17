@@ -2,3 +2,4 @@
 /pkg
 data/
 __pycache__/
+.dirge/
