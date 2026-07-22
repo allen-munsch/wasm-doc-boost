@@ -6,14 +6,14 @@
 <title>wasm-doc-boost — Document Classification &amp; OCR</title>
 <style>
   :root {
-    --bg: #1a1a2e;
-    --panel: #16213e;
-    --card: #0f3460;
+    --bg: #0d1117;
+    --panel: #161b22;
+    --border: #30363d;
+    --text: #c9d1d9;
+    --muted: #8b949e;
     --accent: #e94560;
-    --text: #eee;
-    --muted: #8892b0;
-    --green: #4ecca3;
-    --yellow: #f0c040;
+    --green: #3fb950;
+    --yellow: #d2991d;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
@@ -22,29 +22,29 @@
     color: var(--text);
     min-height: 100vh;
     display: flex;
+    flex-direction: row;
   }
   aside {
-    width: 380px;
+    width: 320px;
     background: var(--panel);
-    padding: 20px;
+    border-right: 1px solid var(--border);
+    padding: 16px;
     display: flex;
     flex-direction: column;
-    gap: 12px;
-    border-right: 1px solid rgba(255,255,255,0.08);
+    gap: 10px;
     overflow-y: auto;
     max-height: 100vh;
     flex-shrink: 0;
   }
   aside h1 { font-size: 1.1rem; font-weight: 700; letter-spacing: -0.02em; }
-  aside h1 span { color: var(--accent); }
-
+  aside h3 { font-size: 0.8rem; color: var(--muted); margin-top: 4px; margin-bottom: 2px; }
   #drop-zone {
     border: 2px dashed var(--muted);
-    border-radius: 10px;
-    padding: 18px 16px;
+    border-radius: 8px;
+    padding: 20px;
     text-align: center;
     cursor: pointer;
-    transition: border-color 0.2s, background 0.2s;
+    transition: border-color 0.15s;
     color: var(--muted);
     font-size: 0.85rem;
   }
@@ -52,21 +52,16 @@
   #drop-zone input { display: none; }
 
   .card {
-    background: var(--card);
-    border-radius: 8px;
-    padding: 12px 14px;
-  }
-  .card h3 {
+    background: rgba(255,255,255,0.03);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px;
     font-size: 0.72rem;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--muted);
-    margin-bottom: 10px;
   }
+  .card h3 { font-size: 0.75rem; margin-bottom: 4px; color: var(--muted); }
 
-  /* ── Status bar ── */
   .stage-row {
-    display: flex; align-items: center; gap: 8px;
+    display: flex; align-items: center; gap: 6px;
     font-size: 0.73rem; color: var(--muted);
     padding: 4px 0;
   }
@@ -80,7 +75,7 @@
   .mini-progress {
     flex: 1; height: 4px;
     background: rgba(255,255,255,0.06);
-    border-radius: 2px; overflow: hidden;
+    border-radius: 2px;
   }
   .mini-progress-fill {
     height: 100%; border-radius: 2px;
@@ -88,145 +83,168 @@
   }
   .mini-progress-fill.done { background: var(--green); }
 
-  /* ── Scores ── */
   .score-row {
-    display: flex; align-items: center; gap: 8px;
+    display: flex; align-items: center; gap: 6px;
     margin-bottom: 5px; font-size: 0.8rem;
   }
   .score-label { width: 80px; text-align: right; color: var(--muted); flex-shrink: 0; }
   .score-bar-bg {
     flex: 1; height: 16px;
     background: rgba(255,255,255,0.06);
-    border-radius: 4px; overflow: hidden;
+    border-radius: 3px; overflow: hidden;
   }
-  .score-bar-fill { height: 100%; border-radius: 4px; transition: width 0.4s ease; }
-  .score-val { width: 40px; font-variant-numeric: tabular-nums; font-size: 0.78rem; flex-shrink: 0; }
+  .score-bar-fill { height: 100%; border-radius: 3px; transition: width 0.3s; }
+  .score-val { width: 36px; font-size: 0.7rem; font-weight: 600; }
 
-  /* ── Output ── */
   .output-area {
-    font-size: 0.76rem; line-height: 1.5; white-space: pre-wrap;
-    color: var(--muted);
-    border-top: 1px solid rgba(255,255,255,0.06);
-    margin-top: 8px; padding-top: 8px;
+    background: rgba(0,0,0,0.3);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 8px;
+    max-height: 200px;
+    overflow-y: auto;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 0.65rem;
+    white-space: pre-wrap;
+    word-break: break-all;
   }
 
-  /* ── Buttons ── */
-  button {
-    padding: 7px 14px; border: none; border-radius: 6px;
-    font-size: 0.8rem; cursor: pointer; font-weight: 600; transition: opacity 0.15s;
+  .glm-region {
+    border-bottom: 1px solid var(--border);
+    padding: 6px 0;
   }
-  button:disabled { opacity: 0.4; cursor: not-allowed; }
-  .btn-accent { background: var(--accent); color: #fff; }
-  .btn-outline { background: transparent; border: 1px solid var(--muted); color: var(--text); }
-  .btn-sm { padding: 4px 10px; font-size: 0.72rem; }
-  .tool-row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; }
+  .glm-region:last-child { border-bottom: none; }
 
-  /* ── Redaction ── */
+  .btn-outline, .btn-accent, .btn-sm {
+    cursor: pointer;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 0.68rem;
+    background: rgba(255,255,255,0.06);
+    color: var(--text);
+  }
+  .btn-outline:hover { background: rgba(255,255,255,0.12); }
+  .btn-accent { border-color: var(--accent); background: rgba(233,69,96,0.12); }
+  .btn-accent:hover { background: rgba(233,69,96,0.25); }
+  .btn-sm { padding: 2px 6px; font-size: 0.63rem; }
+
+  .pii-region { border-color: var(--accent) !important; }
+
+  .collapse { margin-top: 6px; }
   .collapse-header {
-    display: flex; align-items: center; gap: 6px;
-    cursor: pointer; font-size: 0.72rem;
-    text-transform: uppercase; letter-spacing: 0.08em;
-    color: var(--muted); margin-bottom: 8px;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 0.73rem;
+    color: var(--muted);
+    padding: 4px 0;
   }
-  .collapse-header::before { content: '▶'; font-size: 0.6rem; transition: transform 0.2s; }
-  .collapse.open .collapse-header::before { transform: rotate(90deg); }
-  .collapse-body { display: none; }
+  .collapse .collapse-body { display: none; }
   .collapse.open .collapse-body { display: block; }
-  .redaction-row {
-    display: flex; align-items: center; gap: 8px;
-    font-size: 0.76rem; margin-bottom: 3px; color: var(--muted);
-  }
-  .redaction-row code {
-    background: rgba(255,255,255,0.05);
-    padding: 2px 6px; border-radius: 3px; font-size: 0.7rem;
-  }
 
-  /* ── Main viewer ── */
+  .region-card {
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 6px;
+    margin: 4px 0;
+    font-size: 0.68rem;
+    cursor: pointer;
+    transition: border-color 0.15s;
+  }
+  .region-card:hover { border-color: var(--accent); }
+  .region-card.redacted { opacity: 0.4; text-decoration: line-through; }
+
   main {
-    flex: 1; display: flex; flex-direction: column;
-    align-items: center; justify-content: center;
-    position: relative; overflow: hidden; padding: 24px;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    overflow: hidden;
   }
-  #viewer-container { position: relative; max-width: 100%; max-height: 100%; }
-  #viewer-container canvas, #viewer-container img {
-    max-width: 100%; max-height: 75vh;
-    object-fit: contain; border-radius: 6px;
-    box-shadow: 0 4px 24px rgba(0,0,0,0.4);
+  main img {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    display: block;
   }
-  #redact-canvas { position: absolute; top: 0; left: 0; cursor: crosshair; }
-  .placeholder { color: var(--muted); font-size: 0.9rem; text-align: center; }
-
+  #redact-canvas {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    pointer-events: none;
+  }
+  .placeholder {
+    color: var(--muted);
+    font-size: 1rem;
+  }
   footer {
-    margin-top: auto; font-size: 0.62rem; color: var(--muted);
-    text-align: center; line-height: 1.6;
+    font-size: 0.62rem;
+    color: var(--muted);
+    text-align: center;
+    margin-top: auto;
+    padding: 6px 0;
   }
 </style>
-<script type="importmap">
-{
-  "imports": {
-    "onnxruntime-common": "./node_modules/onnxruntime-web/dist/ort.bundle.min.mjs",
-    "onnxruntime-web/webgpu": "./node_modules/onnxruntime-web/dist/ort.bundle.min.mjs"
-  }
-}
-</script>
 </head>
 <body>
 
 <aside>
-  <h1>wasm-<span>doc-boost</span></h1>
+  <h1>&#x1F4C4; wasm-doc-boost</h1>
 
+  <!-- Drop zone -->
   <div id="drop-zone">
     &#x1F4C4; Drop image here or click to browse
     <input type="file" id="file-input" accept="image/*">
   </div>
 
-  <!-- ── Loading stages ── -->
+  <!-- Stages -->
+  <h3>Engine Status</h3>
   <div class="card" id="stages-card">
-    <h3>&#x26A1; Engine Status</h3>
     <div class="stage-row" id="stage-wasm">
-      <span class="stage-icon">&#x2699;</span>
+      <span class="stage-icon">&#x26AB;</span>
       <span class="stage-label">GBDT/WASM</span>
       <span class="stage-status busy">Loading…</span>
     </div>
     <div class="stage-row" id="stage-tess">
-      <span class="stage-icon">&#x1F4DD;</span>
+      <span class="stage-icon">&#x26AB;</span>
       <span class="stage-label">Tesseract</span>
       <span class="stage-status">Waiting…</span>
     </div>
     <div class="stage-row" id="stage-glm">
-      <span class="stage-icon">&#x1F9E0;</span>
+      <span class="stage-icon">&#x26AB;</span>
       <span class="stage-label">GLM-OCR</span>
       <span class="stage-status">Waiting…</span>
-      <div class="mini-progress" style="display:none" id="glm-mini-progress">
-        <div class="mini-progress-fill" id="glm-mini-fill" style="width:0%"></div>
-      </div>
+    </div>
+    <div class="mini-progress" id="glm-mini-progress">
+      <div class="mini-progress-fill" id="glm-mini-fill" style="width:0%"></div>
     </div>
   </div>
 
-  <!-- ── GBDT scores ── -->
+  <!-- Scores -->
   <div class="card" style="display:none" id="scores-card">
-    <h3>&#x2699; Classification</h3>
+    <h3>Classification</h3>
     <div id="scores-container"></div>
   </div>
 
-  <!-- ── OCR Results ── -->
-   <div class="card" style="display:none" id="ocr-card">
-    <h3>&#x1F4DD; OCR</h3>
-    <div style="margin-bottom:6px">
-      <textarea id="ocr-prompt" rows="2" style="width:100%;box-sizing:border-box;background:rgba(255,255,255,0.06);border:1px solid var(--border);color:var(--fg);border-radius:4px;padding:6px;font-size:0.7rem;resize:vertical;font-family:inherit" placeholder="GLM-OCR prompt…"></textarea>
-      <button id="btn-rerun-ocr" class="btn-outline btn-sm" style="margin-top:4px;width:100%">&#x21BB; Rerun OCR</button>
-    </div>
-    <h4 style="font-size:0.7rem;margin-top:8px">Tesseract</h4>
-    <div class="output-area" id="tess-text"></div>
-    <h4 style="font-size:0.7rem;margin-top:8px">GLM-OCR</h4>
-    <div class="output-area" id="glm-text"></div>
+  <!-- OCR output -->
+  <div class="card" style="display:none" id="ocr-card">
+    <h3>OCR</h3>
+    <div class="output-area" id="ocr-output"></div>
   </div>
 
-  <!-- ── Redaction ── -->
+  <!-- PII summary -->
+  <div class="card" style="display:none" id="pii-card">
+    <h3>PII Detected</h3>
+    <div id="pii-list"></div>
+  </div>
+
+  <!-- Redaction -->
   <div class="card collapse" id="redact-collapse">
     <div class="collapse-header" id="redact-toggle">&#x2588; Redaction Tools</div>
     <div class="collapse-body">
-      <div class="tool-row">
+      <div style="display:flex;gap:4px;margin-bottom:6px;flex-wrap:wrap">
         <button class="btn-accent btn-sm" id="btn-redact-mode">Draw Redactions</button>
         <button class="btn-outline btn-sm" id="btn-clear-redactions">Clear</button>
         <button class="btn-outline btn-sm" id="btn-apply-redactions">Export PNG</button>
@@ -242,436 +260,323 @@
 </aside>
 
 <main>
-  <div id="viewer-container" style="display:none">
+  <div id="viewer" style="display:none;position:relative;max-width:100%;max-height:100%">
     <img id="main-image" alt="Uploaded document">
     <canvas id="redact-canvas"></canvas>
   </div>
   <div class="placeholder" id="placeholder">Upload a document image to begin</div>
 </main>
 
+<!-- Tesseract UMD (global Tesseract) -->
 <script src="vendor/tesseract/tesseract.min.js"></script>
 
+<!-- Zod import map -->
+<script type="importmap">
+{
+  "imports": {
+    "zod": "https://esm.sh/zod@3.24.2"
+  }
+}
+</script>
+
 <script type="module">
-// ── Global error trap (WASM aborts kill pages silently) ──
-const _glmErrors = [];
-window._glmErrors = _glmErrors;
-window.addEventListener('error', e => {
-  const msg = e.message || e.error?.message || String(e);
-  console.error('[global] error:', msg);
-  _glmErrors.push(msg);
-});
-window.addEventListener('unhandledrejection', e => {
-  const msg = e.reason?.message || String(e.reason);
-  console.error('[global] unhandled rejection:', msg);
-  _glmErrors.push(msg);
-});
+// ── DocBoost-powered unified document analysis ─────────────────────────
 
-import init, { load_model, classify_file } from './wasm_bridge.js';
+import { createDocBoost } from './src/docboost.js';
+import {
+  regions, redactions, classification, provenance, fields,
+  addFieldAnnotation, redactRegion, unredactRegion, toJSON,
+} from './src/enrich.js';
 
-// ── GLM-OCR backend ──────────────────────────────────
-const GLM_BACKEND_URL = 'http://localhost:8765';
-let glmBackendAvailable = false;
-
-// ── DOM refs ─────────────────────────────────────────
+// ── DOM refs ──
 const $ = (s) => document.querySelector(s);
 
-// Stages
-const stageWasm   = $('#stage-wasm .stage-status');
-const stageTess   = $('#stage-tess .stage-status');
-const stageGlm    = $('#stage-glm .stage-status');
-const glmMiniProg = $('#glm-mini-progress');
-const glmMiniFill = $('#glm-mini-fill');
-
-// Cards
+const stageWasm   = $('#stage-wasm');
+const stageTess   = $('#stage-tess');
+const stageGlm    = $('#stage-glm');
 const scoresCard  = $('#scores-card');
 const scoresCont  = $('#scores-container');
 const ocrCard     = $('#ocr-card');
-const tessText    = $('#tess-text');
-const glmText     = $('#glm-text');
-const ocrPrompt   = $('#ocr-prompt');
-const btnRerunOcr = $('#btn-rerun-ocr');
-
-// Viewer
+const ocrOutput   = $('#ocr-output');
+const piiCard     = $('#pii-card');
+const piiList     = $('#pii-list');
 const dropZone    = $('#drop-zone');
 const fileInput   = $('#file-input');
 const mainImage   = $('#main-image');
-const viewerCont  = $('#viewer-container');
+const viewer      = $('#viewer');
 const placeholder = $('#placeholder');
 const redactCanvas = $('#redact-canvas');
-
-// Redaction
-const redactCollapse = $('#redact-collapse');
-const redactToggle   = $('#redact-toggle');
 const btnRedactMode  = $('#btn-redact-mode');
 const btnClearRedact = $('#btn-clear-redactions');
 const btnApplyRedact = $('#btn-apply-redactions');
+const redactToggle   = $('#redact-toggle');
+const redactCollapse = $('#redact-collapse');
 const redactList     = $('#redactions-list');
 
-// ── Labels ───────────────────────────────────────────
 const LABELS = ['is_document', 'is_digital', 'is_paper', 'is_crumpled', 'is_shadow'];
 
-// ── State ────────────────────────────────────────────
-let currentBytes = null;
-let currentBlob = null;
-let redactions = [], drawingRedaction = false, drawStart = null, redactMode = false;
-let modelLoaded = false;
-let tessReady = false, tessWorker = null;
+// ── State ──
+let db = null;
+let currentDoc = null;
+let drawingRedaction = false;
+let drawStart = null;
+let redactMode = false;
 
-// ── Stage helpers ────────────────────────────────────
+// ── Stage helpers ──
 function setStage(el, text, cls) {
   el.textContent = text;
   el.className = 'stage-status ' + (cls || '');
 }
 
-// ── WASM init ────────────────────────────────────────
-async function initWasm() {
-  setStage(stageWasm, 'Loading…', 'busy');
+// ── Init ──
+(async function init() {
   try {
-    console.error('[wasm] init() starting...');
-    await init();
-    console.error('[wasm] init() done, fetching model.json...');
-    const resp = await fetch('model.json');
-    if (!resp.ok) throw new Error(`HTTP ${resp.status} fetching model.json`);
-    const jsonText = await resp.text();
-    console.error(`[wasm] model.json fetched (${jsonText.length} bytes), loading...`);
-    await load_model(jsonText);
-    console.error('[wasm] load_model() done');
-    modelLoaded = true;
-    setStage(stageWasm, 'Ready', 'ok');
+    db = await createDocBoost({
+      modelPath: 'model.json',
+      tessWorkerPath: 'vendor/tesseract/worker.min.js',
+      tessCorePath: 'vendor/tesseract',
+      glmBackend: 'http://localhost:8765',
+    }, function (stage, status, msg) {
+      const el = stage === 'wasm' ? stageWasm
+        : stage === 'tesseract' ? stageTess
+        : stage === 'glm' ? stageGlm : null;
+      if (el) setStage(el, msg || status, status);
+    });
   } catch (e) {
-    console.error('[wasm] INIT FAILED:', e?.message || e, e?.stack);
-    throw e;
+    setStage(stageWasm, 'Failed: ' + (e.message || String(e)), 'err');
+    console.error('DocBoost init failed:', e);
   }
-}
+})();
 
-// ── Tesseract init ───────────────────────────────────
-async function initTesseract() {
-  setStage(stageTess, 'Loading…', 'busy');
-  tessWorker = await Tesseract.createWorker('eng', 1, {
-    workerPath: 'vendor/tesseract/worker.min.js',
-    corePath: 'vendor/tesseract',
-  });
-  tessReady = true;
-  setStage(stageTess, 'Ready', 'ok');
-}
-
-// ── GLM-OCR backend health check ─────────────────────
-async function checkGlmBackend() {
-  try {
-    const r = await fetch(`${GLM_BACKEND_URL}/health`, { signal: AbortSignal.timeout(3000) });
-    if (r.ok) {
-      glmBackendAvailable = true;
-      setStage(stageGlm, 'Backend ready', 'ok');
-      return;
-    }
-  } catch {}
-  glmBackendAvailable = false;
-  setStage(stageGlm, 'Backend unreachable', 'err');
-}
-
-// ── Full init cascade ────────────────────────────────
-async function initAll() {
-  try {
-    await initWasm();
-  } catch (e) {
-    setStage(stageWasm, `Failed: ${e?.message || e}`, 'err');
-    console.error('WASM init failed:', e);
-  }
-
-  const tessP = initTesseract().catch(e => {
-    setStage(stageTess, 'Failed', 'err');
-    console.error('Tesseract init failed:', e);
-    return null;
-  });
-
-  const glmP = checkGlmBackend();
-
-  await Promise.all([tessP, glmP]);
-}
-
-// ── Cascade router ───────────────────────────────────
+// ── File handling ──
 async function handleFile(file) {
-  const buf = await file.arrayBuffer();
-  currentBytes = new Uint8Array(buf);
+  if (!db) return;
 
-  // Display image
-  const blob = new Blob([buf], { type: file.type });
-  currentBlob = blob;
+  // Show image
+  const blob = new Blob([await file.arrayBuffer()], { type: file.type });
   mainImage.src = URL.createObjectURL(blob);
   mainImage.onload = () => {
-    viewerCont.style.display = 'block';
+    viewer.style.display = 'block';
     placeholder.style.display = 'none';
     setupCanvas();
   };
 
-  // ── Step 1: Classification ──
+  // Analyze
   scoresCard.style.display = 'block';
-  scoresCont.innerHTML = '<span style="color:var(--muted);font-size:0.73rem">Classifying…</span>';
+  scoresCont.innerHTML = '<span style="color:var(--muted);font-size:0.73rem">Analyzing…</span>';
 
-  let scores;
   try {
-    scores = classify_file(currentBytes, file.name);
+    currentDoc = await db.analyze(file);
   } catch (e) {
-    scoresCont.innerHTML = '<span style="color:var(--accent)">Classification failed</span>';
-    console.error('Classify error:', e);
-    if (tessReady || glmBackendAvailable) scoresCont.innerHTML += '<br><span style="font-size:0.68rem">OCR may still work</span>';
-    else return;
-    scores = null;
+    scoresCont.innerHTML = '<span style="color:var(--accent)">Analysis failed: ' + (e.message || String(e)) + '</span>';
+    console.error('Analyze error:', e);
+    return;
   }
 
-  if (scores) {
-    // Sort by score descending
-    const pairs = LABELS.map((l) => ({ label: l, score: scores[l] }));
-    pairs.sort((a, b) => b.score - a.score);
-
-    const scoreColor = (pct) => {
-      // Green at 100, yellow at 50, orange at 25, red at 0 — HSL blend
-      if (pct >= 75) return `hsl(${(pct - 75) * 4.8}, 70%, 45%)`;     // yellow-green → green
-      if (pct >= 50) return `hsl(${45 + (pct - 50) * 0.6}, 80%, 48%)`; // orange → yellow
-      if (pct >= 25) return `hsl(${15 + (pct - 25) * 1.2}, 85%, 45%)`; // red → orange
-      return `hsl(${pct * 0.6}, 80%, 42%)`;                             // dark red → red
-    };
-
-    scoresCont.innerHTML = pairs.map((p) => {
-      const pct = Math.round(p.score * 100);
-      return `<div class="score-row">
-        <span class="score-label">${p.label.replace(/^is_/, '')}</span>
-        <div class="score-bar-bg">
-          <div class="score-bar-fill" style="width:${pct}%;background:${scoreColor(pct)}"></div>
-        </div>
-        <span class="score-val">${pct}%</span>
-      </div>`;
-    }).join('');
-  }
-
-  // ── Step 2: OCR cascade ──
-  runOcr();
-
-  // Redact canvas setup
-  redactions = [];
-  updateRedactionList();
+  renderScores(currentDoc);
+  renderOcr(currentDoc);
+  renderPii(currentDoc);
   clearRedactionCanvas();
 }
 
-// ── hOCR parser ──────────────────────────────────────
-function parseHocrWords(hocr) {
-  const words = [];
-  const re = /<span\s+class=['"]ocrx_word['"][^>]*title=['"]([^'"]+)['"][^>]*>([^<]*)<\/span>/g;
-  let m;
-  while ((m = re.exec(hocr))) {
-    const title = m[1];
-    const text = m[2].trim();
-    if (!text) continue;
-    const bboxMatch = title.match(/bbox\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)/);
-    const confMatch = title.match(/x_wconf\s+(\d+)/);
-    if (!bboxMatch) continue;
-    words.push({
-      text,
-      confidence: confMatch ? parseInt(confMatch[1]) : 0,
-      bbox: {
-        x: parseInt(bboxMatch[1]),
-        y: parseInt(bboxMatch[2]),
-        w: parseInt(bboxMatch[3]),
-        h: parseInt(bboxMatch[4]),
-      },
-    });
+// ── Render scores ──
+function renderScores(doc) {
+  const cls = classification(doc);
+  if (!cls) {
+    scoresCont.innerHTML = '<span style="color:var(--muted)">No classification available</span>';
+    return;
   }
-  return words;
+
+  const scoreColor = (pct) => {
+    if (pct >= 75) return 'hsl(' + ((pct - 75) * 4.8) + ', 70%, 45%)';
+    if (pct >= 50) return 'hsl(' + (45 + (pct - 50) * 0.6) + ', 80%, 48%)';
+    if (pct >= 25) return 'hsl(' + (15 + (pct - 25) * 1.2) + ', 85%, 45%)';
+    return 'hsl(' + (pct * 0.6) + ', 80%, 42%)';
+  };
+
+  const pairs = LABELS.map(l => ({ label: l, score: cls[l] }));
+  pairs.sort((a, b) => b.score - a.score);
+
+  scoresCont.innerHTML = pairs.map(p => {
+    const pct = Math.round(p.score * 100);
+    return '<div class="score-row">'
+      + '<span class="score-label">' + p.label.replace(/^is_/, '') + '</span>'
+      + '<div class="score-bar-bg">'
+      + '<div class="score-bar-fill" style="width:' + pct + '%;background:' + scoreColor(pct) + '"></div>'
+      + '</div>'
+      + '<span class="score-val">' + pct + '%</span>'
+      + '</div>';
+  }).join('');
 }
 
-// ── OCR: Tesseract + GLM-OCR in parallel ─────────────
-const DEFAULT_GLM_PROMPT = 'Text Recognition:';
-
-async function runOcr() {
+// ── Render OCR ──
+function renderOcr(doc) {
   ocrCard.style.display = 'block';
-  if (!currentBytes) return;
-
-  const ocrTasks = [];
-
-  if (tessReady && tessWorker) {
-    ocrTasks.push((async () => {
-      tessText.textContent = 'Running…';
-      try {
-        // Request hOCR + blocks output for word-level bbox
-        const { data } = await tessWorker.recognize(currentBytes, {}, { hocr: true });
-        const words = data.hocr ? parseHocrWords(data.hocr) : [];
-        const result = {
-          text: data.text || '',
-          confidence: Math.round((data.confidence || 0) * 100) / 100,
-          word_count: words.length,
-          words: words.slice(0, 100),
-        };
-        tessText.textContent = JSON.stringify(result, null, 2);
-      } catch (e) {
-        tessText.textContent = `Tesseract error: ${e?.message || String(e)}`;
-        console.error('Tesseract error:', e);
-      }
-    })());
-  } else {
-    tessText.textContent = tessReady === false ? 'Not available (init failed).' : 'Not available.';
+  const regs = regions(doc);
+  if (regs.length === 0) {
+    ocrOutput.textContent = 'No text regions detected.';
+    return;
   }
 
-  if (glmBackendAvailable) {
-    ocrTasks.push((async () => {
-      glmText.textContent = 'Running…';
-      try {
-        // Wait for the image to load
-        if (!mainImage.complete || !mainImage.naturalWidth) {
-          await new Promise(resolve => mainImage.addEventListener('load', resolve, { once: true }));
-        }
-        const promptText = (ocrPrompt.value || DEFAULT_GLM_PROMPT).trim();
+  const piiColors = {
+    PAN:'#dc2626', CVV:'#dc2626', EXPIRY:'#dc2626',
+    SSN:'#ea580c', PHONE:'#ea580c', EMAIL:'#ea580c',
+    ROUTING:'#ea580c', ACCOUNT:'#ea580c', DOB:'#ea580c',
+    ADDRESS:'#f59e0b', NAME:'#f59e0b', ZIP:'#f59e0b',
+  };
 
-        // Convert image to base64 via canvas
-        const cv = document.createElement('canvas');
-        cv.width = mainImage.naturalWidth;
-        cv.height = mainImage.naturalHeight;
-        cv.getContext('2d').drawImage(mainImage, 0, 0);
-        const imageB64 = cv.toDataURL('image/jpeg', 0.85).split(',')[1];
-
-        const t0 = performance.now();
-        const r = await fetch(`${GLM_BACKEND_URL}/ocr`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ image: imageB64, prompt: promptText }),
-        });
-        if (!r.ok) throw new Error(`Backend ${r.status}: ${await r.text()}`);
-        const data = await r.json();
-        const elapsed = Math.round(performance.now() - t0);
-
-        // Display regions with clickable redaction bboxes
-        if (data.regions && Array.isArray(data.regions)) {
-          const regions = data.regions;
-          const sx = mainImage.getBoundingClientRect().width / mainImage.naturalWidth;
-          const sy = mainImage.getBoundingClientRect().height / mainImage.naturalHeight;
-          const piiColors = { PAN:'#dc2626', CVV:'#dc2626', EXPIRY:'#dc2626',
-                              SSN:'#ea580c', PHONE:'#ea580c', EMAIL:'#ea580c',
-                              ROUTING:'#ea580c', ACCOUNT:'#ea580c', DOB:'#ea580c',
-                              ADDRESS:'#f59e0b', NAME:'#f59e0b', ZIP:'#f59e0b' };
-          let anyPii = false;
-          let html = '';
-          for (let i = 0; i < regions.length; i++) {
-            const r = regions[i];
-            const [x1, y1, x2, y2] = r.bbox;
-            // Scan for PII in this region's text
-            let piiHits = [];
-            try { piiHits = scan_pii(r.text); } catch(e) { console.warn('pii scan error:', e); }
-            const piiBadges = piiHits.map(h => {
-              const c = piiColors[h.kind] || '#f59e0b';
-              const label = h.kind === 'ACCOUNT' ? 'BANK' : h.kind;
-              return `<span style="display:inline-block;background:${c};color:#fff;padding:1px 4px;border-radius:3px;font-size:0.6rem;margin:0 2px">${label}: ${h.text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</span>`;
-            }).join('');
-            if (piiHits.length > 0) anyPii = true;
-            const isPii = piiHits.length > 0;
-            html += '<div class="glm-region">'
-              + (piiBadges ? `<div style="margin:2px 0">${piiBadges}</div>` : '')
-              + `<button class="btn-outline btn-sm glm-bbox-btn${isPii ? ' pii-region' : ''}" data-x1="${x1}" data-y1="${y1}" data-x2="${x2}" data-y2="${y2}">`
-              + `&#x25A0; Region ${i+1} [${x1},${y1} ${x2},${y2}]</button>`
-              + `<pre style="margin:4px 0 8px 0;white-space:pre-wrap;font-size:0.7rem">${r.text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</pre>`
-              + '</div>';
-          }
-          glmText.innerHTML = html;
-          // Add auto-redact button if PII found
-          if (anyPii) {
-            const btn = document.createElement('button');
-            btn.className = 'btn-outline btn-sm';
-            btn.style.cssText = 'display:block;margin:8px 0 0 0;background:#dc2626;color:#fff;border-color:#dc2626';
-            btn.textContent = '\u{1F6AB} Auto-Redact All PII';
-            btn.onclick = () => {
-              glmText.querySelectorAll('.pii-region').forEach(b => b.click());
-            };
-            glmText.insertBefore(btn, glmText.firstChild);
-          }
-          glmText.querySelectorAll('.glm-bbox-btn').forEach(btn => {
-            btn.onclick = () => {
-              const rx1 = Math.round(parseFloat(btn.dataset.x1) * sx);
-              const ry1 = Math.round(parseFloat(btn.dataset.y1) * sy);
-              const rx2 = Math.round(parseFloat(btn.dataset.x2) * sx);
-              const ry2 = Math.round(parseFloat(btn.dataset.y2) * sy);
-              redactions.push({ x: rx1, y: ry1, w: rx2 - rx1, h: ry2 - ry1 });
-              updateRedactionList();
-              drawRedactions();
-            };
-          });
-        } else {
-          glmText.textContent = JSON.stringify(data, null, 2);
-        }
-      } catch (e) {
-        glmText.textContent = `GLM-OCR error: ${e?.message || String(e)}`;
-        console.error('GLM-OCR error:', e);
-      }
-    })());
-  } else {
-    glmText.textContent = 'Backend not available. Start the GLM-OCR server on port 8765.';
+  // Group by parentId (line)
+  const byLine = {};
+  for (const r of regs) {
+    const key = r.sourceDetail.parentId || r.id;
+    if (!byLine[key]) byLine[key] = [];
+    byLine[key].push(r);
   }
 
-  await Promise.all(ocrTasks);
+  let html = '';
+  for (const [lineId, words] of Object.entries(byLine)) {
+    words.sort((a, b) => a.bbox.x0 - b.bbox.x0);
+
+    html += '<div class="glm-region">';
+    html += '<div style="display:flex;align-items:center;gap:6px;margin-bottom:2px">';
+
+    // Source badge
+    const src = words[0].source;
+    const badge = src === 'merged' ? '&#x2B50;' : src === 'tesseract' ? 'T' : 'G';
+    html += '<span style="font-size:0.55rem;color:var(--muted);width:14px">' + badge + '</span>';
+
+    // Text
+    const lineText = words.map(w => w.text).join(' ');
+    html += '<span style="font-size:0.7rem">' + esc(lineText) + '</span>';
+
+    // Confidence
+    const avgConf = words.reduce((s, w) => s + w.confidence, 0) / words.length;
+    html += '<span style="font-size:0.55rem;color:var(--muted);margin-left:auto">' + avgConf.toFixed(0) + '%</span>';
+
+    html += '</div>';
+
+    // PII badges in this line
+    const linePii = (doc.pii || []).filter(h => {
+      const hText = h.text.toLowerCase();
+      return words.some(w => w.text.toLowerCase().indexOf(hText) !== -1);
+    });
+    if (linePii.length > 0) {
+      html += '<div style="margin-top:2px">';
+      for (const h of linePii) {
+        const c = piiColors[h.kind] || '#dc2626';
+        html += '<span style="display:inline-block;background:' + c + ';color:#fff;padding:1px 4px;border-radius:3px;font-size:0.55rem;margin:1px 2px">' + h.kind + ': ' + esc(h.text) + '</span>';
+      }
+      html += '</div>';
+    }
+
+    // Region button for redaction
+    html += '<button class="btn-outline btn-sm region-btn" data-line="' + lineId + '" style="margin-top:2px">&#x25A0; Redact line</button>';
+
+    html += '</div>';
+  }
+
+  ocrOutput.innerHTML = html;
+
+  // Wire up redaction buttons
+  ocrOutput.querySelectorAll('.region-btn').forEach(btn => {
+    btn.onclick = () => {
+      const lineId = btn.dataset.line;
+      const lineRegs = byLine[lineId] || [];
+      for (const r of lineRegs) {
+        currentDoc = redactRegion(r.id)(currentDoc);
+      }
+      updateRedactionList();
+      drawRedactOverlay();
+    };
+  });
 }
 
-// ── Canvas / Redaction helpers ───────────────────────
+function esc(s) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// ── Render PII ──
+function renderPii(doc) {
+  const hits = doc.pii || [];
+  if (hits.length === 0) {
+    piiCard.style.display = 'none';
+    return;
+  }
+  piiCard.style.display = 'block';
+  piiList.innerHTML = hits.map(h =>
+    '<div style="font-size:0.68rem;padding:2px 0">'
+    + '<span style="color:var(--accent);font-weight:600">' + h.kind + '</span>'
+    + ': ' + esc(h.text)
+    + ' <span style="color:var(--muted);font-size:0.58rem">[' + h.start + '-' + h.end + ']</span>'
+    + '</div>'
+  ).join('');
+}
+
+// ── Redaction canvas ──
 function setupCanvas() {
-  if (!mainImage.naturalWidth) return;
   const rect = mainImage.getBoundingClientRect();
   redactCanvas.width = rect.width;
   redactCanvas.height = rect.height;
   redactCanvas.style.width = rect.width + 'px';
   redactCanvas.style.height = rect.height + 'px';
-  redactCanvas.style.top = mainImage.offsetTop + 'px';
-  redactCanvas.style.left = mainImage.offsetLeft + 'px';
 }
 
 function clearRedactionCanvas() {
   const ctx = redactCanvas.getContext('2d');
   ctx.clearRect(0, 0, redactCanvas.width, redactCanvas.height);
+  drawRedactOverlay();
 }
 
-function drawRedactions() {
+function drawRedactOverlay() {
   const ctx = redactCanvas.getContext('2d');
   ctx.clearRect(0, 0, redactCanvas.width, redactCanvas.height);
+
+  if (!currentDoc) return;
+
+  const reds = redactions(currentDoc);
+  const sw = redactCanvas.width / mainImage.naturalWidth;
+  const sh = redactCanvas.height / mainImage.naturalHeight;
+
   ctx.fillStyle = 'rgba(0,0,0,0.85)';
-  for (const r of redactions) {
-    ctx.fillRect(r.x, r.y, r.w, r.h);
+  for (const r of reds) {
+    ctx.fillRect(
+      Math.round(r.bbox.x0 * sw),
+      Math.round(r.bbox.y0 * sh),
+      Math.round((r.bbox.x1 - r.bbox.x0) * sw),
+      Math.round((r.bbox.y1 - r.bbox.y0) * sh),
+    );
   }
 }
 
 function updateRedactionList() {
-  redactList.innerHTML = redactions.map((r, i) =>
-    `<div class="redaction-row">
-      <code>[${Math.round(r.x)},${Math.round(r.y)} ${Math.round(r.w)}x${Math.round(r.h)}]</code>
-      <button class="btn-outline btn-sm" data-idx="${i}">✕</button>
-    </div>`
+  if (!currentDoc) {
+    redactList.innerHTML = '';
+    return;
+  }
+
+  const reds = redactions(currentDoc);
+  if (reds.length === 0) {
+    redactList.innerHTML = '<span style="color:var(--muted);font-size:0.65rem">No redactions</span>';
+    return;
+  }
+
+  redactList.innerHTML = reds.map((r, i) =>
+    '<div style="font-size:0.65rem;padding:2px 0;display:flex;justify-content:space-between;align-items:center">'
+    + '<code>[' + Math.round(r.bbox.x0) + ',' + Math.round(r.bbox.y0) + ' ' + Math.round(r.bbox.x1 - r.bbox.x0) + 'x' + Math.round(r.bbox.y1 - r.bbox.y0) + ']</code>'
+    + '<button class="btn-outline btn-sm" data-rid="' + r.id + '">&#x2715;</button>'
+    + '</div>'
   ).join('');
 
   redactList.querySelectorAll('button').forEach(btn => {
     btn.onclick = () => {
-      redactions.splice(parseInt(btn.dataset.idx), 1);
+      currentDoc = unredactRegion(btn.dataset.rid)(currentDoc);
       updateRedactionList();
-      drawRedactions();
+      drawRedactOverlay();
     };
   });
 }
 
-function applyRedactions() {
-  const canvas = document.createElement('canvas');
-  canvas.width = mainImage.naturalWidth;
-  canvas.height = mainImage.naturalHeight;
-  const ctx = canvas.getContext('2d');
-  ctx.drawImage(mainImage, 0, 0);
-  const sx = canvas.width / redactCanvas.width;
-  const sy = canvas.height / redactCanvas.height;
-  ctx.fillStyle = '#000';
-  for (const r of redactions) {
-    ctx.fillRect(r.x * sx, r.y * sy, r.w * sx, r.h * sy);
-  }
-  canvas.toBlob(blob => {
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = 'redacted.png';
-    a.click();
-  });
-}
-
-// ── Drop zone ────────────────────────────────────────
-dropZone.onclick = () => fileInput.click();
+// ── Event listeners ──
 fileInput.onchange = () => { if (fileInput.files[0]) handleFile(fileInput.files[0]); };
 dropZone.ondragover = (e) => { e.preventDefault(); dropZone.classList.add('drag-over'); };
 dropZone.ondragleave = () => dropZone.classList.remove('drag-over');
@@ -682,10 +587,6 @@ dropZone.ondrop = (e) => {
   if (file && file.type.startsWith('image/')) handleFile(file);
 };
 
-// ── OCR rerun ────────────────────────────────────────
-btnRerunOcr.onclick = () => runOcr();
-
-// ── Redaction controls ───────────────────────────────
 redactToggle.onclick = () => redactCollapse.classList.toggle('open');
 
 btnRedactMode.onclick = () => {
@@ -698,16 +599,42 @@ btnRedactMode.onclick = () => {
   } else {
     btnRedactMode.style.background = '';
     btnRedactMode.style.color = '';
+    drawingRedaction = false;
+    drawStart = null;
   }
 };
 
 btnClearRedact.onclick = () => {
-  redactions = [];
+  if (!currentDoc) return;
+  const reds = redactions(currentDoc);
+  for (const r of reds) {
+    currentDoc = unredactRegion(r.id)(currentDoc);
+  }
   updateRedactionList();
-  clearRedactionCanvas();
+  drawRedactOverlay();
 };
 
-btnApplyRedact.onclick = applyRedactions;
+btnApplyRedact.onclick = () => {
+  const canvas = document.createElement('canvas');
+  canvas.width = mainImage.naturalWidth;
+  canvas.height = mainImage.naturalHeight;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(mainImage, 0, 0);
+
+  if (currentDoc) {
+    ctx.fillStyle = '#000';
+    for (const r of redactions(currentDoc)) {
+      ctx.fillRect(r.bbox.x0, r.bbox.y0, r.bbox.x1 - r.bbox.x0, r.bbox.y1 - r.bbox.y0);
+    }
+  }
+
+  canvas.toBlob(blob => {
+    const a = document.createElement('a');
+    a.download = 'redacted.png';
+    a.href = URL.createObjectURL(blob);
+    a.click();
+  }, 'image/png');
+};
 
 redactCanvas.onmousedown = (e) => {
   if (!redactMode) return;
@@ -723,40 +650,54 @@ redactCanvas.onmousemove = (e) => {
   const y = e.clientY - rect.top;
   const ctx = redactCanvas.getContext('2d');
   ctx.clearRect(0, 0, redactCanvas.width, redactCanvas.height);
-  drawRedactions();
-  ctx.fillStyle = 'rgba(233,69,96,0.3)';
-  ctx.fillRect(
+  drawRedactOverlay();
+  ctx.strokeStyle = 'var(--accent)';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(
     Math.min(drawStart.x, x), Math.min(drawStart.y, y),
-    Math.abs(x - drawStart.x), Math.abs(y - drawStart.y)
+    Math.abs(x - drawStart.x), Math.abs(y - drawStart.y),
   );
 };
 
 redactCanvas.onmouseup = (e) => {
-  if (!drawingRedaction || !drawStart) return;
+  if (!drawingRedaction || !drawStart || !currentDoc) return;
   drawingRedaction = false;
   const rect = redactCanvas.getBoundingClientRect();
   const x = e.clientX - rect.left;
   const y = e.clientY - rect.top;
-  const r = {
-    x: Math.min(drawStart.x, x),
-    y: Math.min(drawStart.y, y),
-    w: Math.abs(x - drawStart.x),
-    h: Math.abs(y - drawStart.y),
-  };
-  if (r.w > 3 && r.h > 3) {
-    redactions.push(r);
+
+  const rx = Math.min(drawStart.x, x);
+  const ry = Math.min(drawStart.y, y);
+  const rw = Math.abs(x - drawStart.x);
+  const rh = Math.abs(y - drawStart.y);
+
+  if (rw > 3 && rh > 3) {
+    // Convert canvas coords to image coords
+    const sw = mainImage.naturalWidth / redactCanvas.width;
+    const sh = mainImage.naturalHeight / redactCanvas.height;
+
+    // Find regions that overlap the drawn rectangle
+    for (const r of regions(currentDoc)) {
+      const ix0 = Math.max(rx, r.bbox.x0 / sw);
+      const iy0 = Math.max(ry, r.bbox.y0 / sh);
+      const ix1 = Math.min(rx + rw, r.bbox.x1 / sw);
+      const iy1 = Math.min(ry + rh, r.bbox.y1 / sh);
+      if (ix0 < ix1 && iy0 < iy1) {
+        currentDoc = redactRegion(r.id)(currentDoc);
+      }
+    }
     updateRedactionList();
   }
+
   drawStart = null;
-  drawRedactions();
+  drawRedactOverlay();
 };
 
+// Window resize → re-setup canvas
 window.addEventListener('resize', () => {
-  if (mainImage.src && mainImage.naturalWidth) { setupCanvas(); drawRedactions(); }
+  if (mainImage.src && mainImage.naturalWidth) setupCanvas();
 });
-
-// ── Start ────────────────────────────────────────────
-initAll();
 </script>
+
 </body>
 </html>

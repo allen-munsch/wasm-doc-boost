@@ -160,60 +160,23 @@ async function main() {
     }
   }
 
-  // ── Step 4: Tesseract output ──
-  console.log('\n=== Step 4: Tesseract output ===');
-  if (tessOk) {
-    try {
-      await page.waitForFunction(
-        () => {
-          const el = document.querySelector('#tess-text');
-          if (!el) return false;
-          const t = el.textContent;
-          return t && t.length > 5 && !t.includes('Running');
-        },
-        { timeout: 30_000 }
-      );
-      const output = await page.locator('#tess-text').textContent();
-      console.log(`[ok] Tesseract (${output.length} chars): ${output.slice(0, 300)}`);
-    } catch {
-      const text = await page.locator('#tess-text').textContent().catch(() => '(missing)');
-      console.error(`[FAIL] Tesseract output: "${text?.slice(0, 200)}"`);
-    }
-  } else {
-    console.log('[skip] Tesseract not available');
-  }
-
-  // ── Step 5: GLM-OCR output ──
-  console.log('\n=== Step 5: GLM-OCR output ===');
-  // Await the pending GLM promise (may already be resolved/rejected)
-  await glmP.catch(() => {});
-  const glmOk = glmStatus && glmStatus.includes('Ready') && !page.isClosed();
-  dumpErrors();
-  if (glmOk) {
-    try {
-      await page.waitForFunction(
-        () => {
-          const el = document.querySelector('#glm-text');
-          if (!el) return false;
-          const t = el.textContent;
-          return t && t.length > 20 &&
-            !t.includes('Running') &&
-            !t.includes('not available');
-        },
-        { timeout: 300_000 }
-      );
-      const output = await page.locator('#glm-text').textContent();
-      if (output.includes('error')) {
-        console.log(`[warn] GLM-OCR output contains error: ${output.slice(0, 500)}`);
-      } else {
-        console.log(`[ok] GLM-OCR (${output.length} chars): ${output.slice(0, 500)}`);
-      }
-    } catch {
-      const text = await page.locator('#glm-text').textContent().catch(() => '(missing)');
-      console.error(`[FAIL] GLM-OCR output: "${text?.slice(0, 300)}"`);
-    }
-  } else {
-    console.log('[skip] GLM-OCR not available');
+  // ── Step 4: OCR output (unified Tesseract + GLM-OCR) ──
+  console.log('\n=== Step 4: OCR output ===');
+  try {
+    await page.waitForFunction(
+      () => {
+        const el = document.querySelector('#ocr-output');
+        if (!el) return false;
+        const t = el.textContent;
+        return t && t.length > 10 && !t.includes('Running');
+      },
+      { timeout: 120_000 }
+    );
+    const output = await page.locator('#ocr-output').textContent();
+    console.log(`[ok] OCR output (${output.length} chars): ${output.slice(0, 400)}`);
+  } catch {
+    const text = await page.locator('#ocr-output').textContent().catch(() => '(missing)');
+    console.error(`[FAIL] OCR output: "${text?.slice(0, 300)}"`);
   }
 
   dumpErrors();
@@ -225,8 +188,8 @@ async function main() {
     glm: document.querySelector('#stage-glm .stage-status')?.textContent,
     scores: document.querySelector('#scores-card')?.style?.display,
     ocr: document.querySelector('#ocr-card')?.style?.display,
-    tessLen: document.querySelector('#tess-text')?.textContent?.length,
-    glmLen: document.querySelector('#glm-text')?.textContent?.length,
+    ocrLen: document.querySelector('#ocr-output')?.textContent?.length,
+    piiCard: document.querySelector('#pii-card')?.style?.display,
   }));
   console.log('\n[final]', JSON.stringify(finalState, null, 2));
 
