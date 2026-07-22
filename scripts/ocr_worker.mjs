@@ -9,7 +9,7 @@ import Tesseract from 'tesseract.js';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
 
-const { chunk } = workerData;
+const { chunk, subdir } = workerData;
 
 let worker;
 async function getWorker() {
@@ -20,7 +20,7 @@ async function getWorker() {
 }
 
 async function ocrImage(filename) {
-  const imgPath = resolve(ROOT, 'data', 'images', 'fatura2', filename);
+  const imgPath = resolve(ROOT, 'data', 'images', subdir, filename);
   let imgBuf;
   try {
     imgBuf = readFileSync(imgPath);

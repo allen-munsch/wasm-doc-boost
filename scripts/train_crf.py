@@ -43,6 +43,8 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 ROOT = Path(__file__).resolve().parent.parent
 SEED = 42
 
@@ -75,7 +77,40 @@ EMAIL_RE = re.compile(r"^[\w.-]+@[\w.-]+\.\w+$")
 PHONE_RE = re.compile(r"^\+\(\d{3}\)\d{3}-\d{4}$")
 ZIP_RE = re.compile(r"^\d{5}(-\d{4})?$")
 
-CRF_LABELS = ["O", "ADDRESS", "NAME", "PHONE", "EMAIL", "ZIP", "ACCOUNT"]
+CRF_LABELS = ["O","ADDRESS","NAME","PHONE","EMAIL","ZIP","ACCOUNT"]
+
+# ── Gazetteer features for ADDRESS disambiguation ──────
+STREET_SUFFIXES = {
+    "street", "st", "st.", "avenue", "ave", "ave.", "road", "rd", "rd.",
+    "drive", "dr", "dr.", "lane", "ln", "ln.", "court", "ct", "ct.",
+    "boulevard", "blvd", "blvd.", "way", "place", "pl", "pl.",
+    "causeway", "cswy", "highway", "hwy", "parkway", "pkwy",
+    "circle", "cir", "trail", "trl", "suite", "ste", "apt", "unit",
+    "po", "p.o.", "box",
+    "terrace", "ter", "ter.", "square", "sq", "plaza", "plz", "mall",
+}
+
+STATE_ABBREV = {
+    "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA",
+    "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD",
+    "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ",
+    "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC",
+    "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY",
+    "DC", "AS", "GU", "MP", "PR", "VI",
+    # Freely Associated States (appear in FATURA2 synthetic data)
+    "FM", "MH", "PW",
+}
+
+DIRECTION_WORDS = {
+    "n", "s", "e", "w", "north", "south", "east", "west",
+    "ne", "nw", "se", "sw", "n.e.", "n.w.", "s.e.", "s.w.",
+    "northeast", "northwest", "southeast", "southwest",
+}
+
+TITLE_PREFIXES = {
+    "mr", "mr.", "mrs", "mrs.", "ms", "ms.", "miss", "dr", "dr.",
+    "prof", "prof.", "sr", "sr.", "jr", "jr.", "md", "phd",
+}
 
 
 def refine_labels(tokens: list[str], ner_tags: list[int]) -> list[str]:
@@ -107,13 +142,6 @@ def refine_labels(tokens: list[str], ner_tags: list[int]) -> list[str]:
         spans.append((start, len(tokens) - 1))
 
     # Process each tag-5 span
-    STREET_SUFFIXES = {"street", "st", "st.", "avenue", "ave", "ave.", "road", "rd",
-                       "rd.", "drive", "dr", "dr.", "lane", "ln", "ln.", "court", "ct",
-                       "ct.", "boulevard", "blvd", "blvd.", "way", "place", "pl", "pl.",
-                       "causeway", "cswy", "highway", "hwy", "parkway", "pkwy",
-                       "circle", "cir", "trail", "trl", "suite", "ste", "apt", "unit",
-                       "po", "p.o.", "box"}
-
     for span_start, span_end in spans:
         # Find the split point: first street-number-like token or street suffix
         split_at = span_end + 1
@@ -149,9 +177,94 @@ def refine_labels(tokens: list[str], ner_tags: list[int]) -> list[str]:
             else:
                 labels[i] = "ADDRESS"
 
-    # Tag-13: payment details → ACCOUNT for numeric tokens
+    # Tag-13: payment details — span-based processing for bank addresses
+    # Bank address blocks in tag-13 contain ZIP, PHONE, EMAIL, plus
+    # bank name + street address.  Process spans similarly to tag-5.
+    spans_13 = []
+    in_span = False
+    start = 0
     for i, tag in enumerate(ner_tags):
-        if tag == 13:
+        if tag == 13 and not in_span:
+            start = i
+            in_span = True
+        elif tag != 13 and in_span:
+            spans_13.append((start, i - 1))
+            in_span = False
+    if in_span:
+        spans_13.append((start, len(tokens) - 1))
+
+    for span_start, span_end in spans_13:
+        # Check if this span contains address-like signals before labeling NAME/ADDRESS.
+        # Without signals, only label explicit PII (EMAIL, PHONE, ZIP, ACCOUNT).
+        span_tokens = [tokens[i].lower().rstrip(",.") for i in range(span_start, span_end + 1)]
+        span_text = " ".join(span_tokens)
+        has_address_signal = (
+            any(t in STREET_SUFFIXES for t in span_tokens) or
+            any(t.upper() in STATE_ABBREV and len(t) == 2 for t in span_tokens) or
+            any(t in DIRECTION_WORDS for t in span_tokens) or
+            bool(ZIP_RE.search(span_text))
+        )
+
+        if not has_address_signal:
+            # Only label explicit PII types; skip NAME/ADDRESS
+            for i in range(span_start, span_end + 1):
+                t = tokens[i]
+                if labels[i] != "O":
+                    continue
+                if EMAIL_RE.match(t):
+                    labels[i] = "EMAIL"
+                elif PHONE_RE.match(t):
+                    labels[i] = "PHONE"
+                elif ZIP_RE.match(t):
+                    labels[i] = "ZIP"
+                elif t.isdigit() and 6 <= len(t) <= 20:
+                    labels[i] = "ACCOUNT"
+            continue
+
+        # Find split point: first street-like token after the bank name
+        split_at = span_end + 1
+        for i in range(span_start, span_end + 1):
+            t = tokens[i]
+            # Street number or street suffix signals start of address
+            if (t[0].isdigit() and 1 <= len(t) <= 5) or t.upper() in STREET_SUFFIXES:
+                split_at = i
+                break
+
+        # Label tokens before split as NAME (bank name)
+        for i in range(span_start, min(split_at, span_end + 1)):
+            t = tokens[i]
+            if labels[i] != "O":
+                continue
+            if EMAIL_RE.match(t):
+                labels[i] = "EMAIL"
+            elif PHONE_RE.match(t):
+                labels[i] = "PHONE"
+            elif ZIP_RE.match(t):
+                labels[i] = "ZIP"
+            elif t.isdigit() and 6 <= len(t) <= 20:
+                labels[i] = "ACCOUNT"
+            elif t.isalpha() and len(t) > 1:
+                labels[i] = "NAME"
+
+        # Label tokens from split point as ADDRESS
+        for i in range(split_at, span_end + 1):
+            t = tokens[i]
+            if labels[i] != "O":
+                continue
+            if EMAIL_RE.match(t):
+                labels[i] = "EMAIL"
+            elif PHONE_RE.match(t):
+                labels[i] = "PHONE"
+            elif ZIP_RE.match(t):
+                labels[i] = "ZIP"
+            elif t.isdigit() and 6 <= len(t) <= 20:
+                labels[i] = "ACCOUNT"
+            else:
+                labels[i] = "ADDRESS"
+
+    # Fallback: per-token tag-13 labeling for isolated tokens not in any span
+    for i, tag in enumerate(ner_tags):
+        if tag == 13 and labels[i] == "O":
             t = tokens[i]
             if t.isdigit() and 4 <= len(t) <= 20:
                 labels[i] = "ACCOUNT"
@@ -178,7 +291,7 @@ def token_shape(token: str) -> str:
     return "".join(result)
 
 
-def extract_features(tokens: list[str], i: int, bboxes: list[list] | None = None) -> dict[str, Any]:
+def extract_features(tokens: list[str], i: int, bboxes: list[list] | None = None, line_info: dict | None = None) -> dict[str, Any]:
     """Extract CRF features for token at position i."""
     t = tokens[i]
     feats = {}
@@ -194,13 +307,38 @@ def extract_features(tokens: list[str], i: int, bboxes: list[list] | None = None
     feats["w_has_digit"] = "1" if any(c.isdigit() for c in t) else "0"
     feats["w_has_at"] = "1" if "@" in t else "0"
     feats["w_has_hyphen"] = "1" if "-" in t else "0"
+    feats["w_has_alpha"] = "1" if any(c.isalpha() for c in t) else "0"
+    feats["w_punct"] = "1" if len(t) > 0 and all(not c.isalnum() for c in t) else "0"
     feats["w_prefix2"] = t[:2].lower() if len(t) >= 2 else t.lower()
     feats["w_suffix2"] = t[-2:].lower() if len(t) >= 2 else t.lower()
     feats["w_prefix3"] = t[:3].lower() if len(t) >= 3 else t.lower()
     feats["w_suffix3"] = t[-3:].lower() if len(t) >= 3 else t.lower()
 
+    # Gazetteer features for ADDRESS/NAME disambiguation
+    tl = t.lower().rstrip(",.")
+    feats["w_street_suffix"] = "1" if tl in STREET_SUFFIXES else "0"
+    feats["w_state_abbrev"] = "1" if t.upper() in STATE_ABBREV and len(t) == 2 else "0"
+    feats["w_direction"] = "1" if tl in DIRECTION_WORDS else "0"
+    feats["w_is_bldg_num"] = "1" if (t[0].isdigit() and 1 <= len(t) <= 5 and not t.isdigit()) else "0"
+    feats["w_title_prefix"] = "1" if tl in TITLE_PREFIXES else "0"
+    feats["w_po_box"] = "1" if tl in {"po", "p.o.", "box", "p.o", "pobox"} else "0"
+
+    # Personal name heuristic: capital-start, alpha, not a known non-name word
+    _is_person_name = (
+        t[0].isupper()
+        and t.isalpha()
+        and len(t) >= 2
+        and len(t) <= 20
+        and tl not in STREET_SUFFIXES
+        and tl not in DIRECTION_WORDS
+        and tl not in TITLE_PREFIXES
+        and t.upper() not in STATE_ABBREV
+        and tl not in {"po", "p.o.", "box", "p.o", "pobox"}
+    )
+    feats["w_is_name_word"] = "1" if _is_person_name else "0"
+
     # Position features
-    feats["pos_bias"] = "1" if i == 0 else ("1" if i == len(tokens) - 1 else "0")
+    feats["pos_bias"] = "1" if i == 0 else ("2" if i == len(tokens) - 1 else "0")
 
     # Neighboring tokens (within window of 2)
     for offset in [-2, -1, 1, 2]:
@@ -211,6 +349,22 @@ def extract_features(tokens: list[str], i: int, bboxes: list[list] | None = None
             feats[f"w{offset:+d}_shape"] = token_shape(tokens[j])[:8]
         else:
             feats[f"w{offset:+d}"] = "__BOS__" if j < 0 else "__EOS__"
+
+    # Composite starter: first char type of current token
+    if t[0].isdigit():
+        feats["w_starts"] = "D"
+    elif t[0].isalpha():
+        feats["w_starts"] = "A"
+    elif t[0] in {'.', ',', '-', '/', '(', ')'}:
+        feats["w_starts"] = "P"
+    else:
+        feats["w_starts"] = "X"
+
+    # Line-aware position (precomputed via line_info)
+    if line_info is not None and i in line_info:
+        li = line_info[i]
+        feats["line_pos"] = li.get("pos", "mid")
+        feats["line_len"] = str(min(li.get("len", 1), 6))
 
     # Bbox layout features (if available)
     if bboxes and i < len(bboxes):
@@ -225,8 +379,32 @@ def extract_features(tokens: list[str], i: int, bboxes: list[list] | None = None
     return feats
 
 
+def _build_line_info(bboxes: list[list]) -> dict:
+    """Precompute per-token line position info from bbox y-coordinates."""
+    if not bboxes:
+        return {}
+    y_buckets: dict[int, list[int]] = defaultdict(list)
+    for k, bb in enumerate(bboxes):
+        y_buckets[bb[1] // 20].append(k)
+    info: dict[int, dict] = {}
+    for line_idxs in y_buckets.values():
+        n = len(line_idxs)
+        for pos_idx, tok_idx in enumerate(line_idxs):
+            if n == 1:
+                pos = "single"
+            elif pos_idx == 0:
+                pos = "first"
+            elif pos_idx == n - 1:
+                pos = "last"
+            else:
+                pos = "mid"
+            info[tok_idx] = {"pos": pos, "len": n}
+    return info
+
+
 def tokens_to_features(tokens: list[str], bboxes: list[list] | None = None) -> list[dict]:
-    return [extract_features(tokens, i, bboxes) for i in range(len(tokens))]
+    line_info = _build_line_info(bboxes) if bboxes else None
+    return [extract_features(tokens, i, bboxes, line_info) for i in range(len(tokens))]
 
 
 # ── Data loading ─────────────────────────────────────
@@ -267,6 +445,7 @@ def align_ocr_to_gt(ocr_words: list[dict], gt_tokens: list[str], gt_labels: list
 
     # Simple approach: align by word position and fuzzy match
     # For each GT token, find the closest OCR word by Levenshtein distance
+    aligned_ocr_texts = []
     aligned_labels = []
     aligned_bboxes = []
     ocr_idx = 0
@@ -282,12 +461,13 @@ def align_ocr_to_gt(ocr_words: list[dict], gt_tokens: list[str], gt_labels: list
                 best_idx = j
 
         if best_dist <= max(3, len(gt_token) // 2):  # Allow some OCR errors
+            aligned_ocr_texts.append(ocr_texts[best_idx])
             aligned_labels.append(gt_labels[gt_i])
             aligned_bboxes.append(ocr_bboxes[best_idx])
             ocr_idx = best_idx + 1
         # else: OCR missed this token, skip it
 
-    return ocr_texts, aligned_labels, aligned_bboxes
+    return aligned_ocr_texts, aligned_labels, aligned_bboxes
 
 
 def _levenshtein(a: str, b: str) -> int:
@@ -417,6 +597,9 @@ def main():
     parser.add_argument("--c2", type=float, default=1.0, help="L2 regularization")
     parser.add_argument("--max-iter", type=int, default=200, help="L-BFGS iterations")
     parser.add_argument("--output", default="data/crf_model.json")
+    parser.add_argument("--kfold", type=int, default=0, help="Run k-fold cross-validation (0=skip)")
+    parser.add_argument("--save-folds", action="store_true", help="Save per-fold metrics to JSON")
+    parser.add_argument("--holdout", type=float, default=0.15, help="Hold-out fraction (used when --kfold=0)")
     args = parser.parse_args()
 
     gt_path = ROOT / args.gt
@@ -470,63 +653,149 @@ def main():
         X.append(feats)
         y.append(labels)
 
-    # ── Train/val split ───────────────────────────────
-    rng = random.Random(SEED)
-    indices = list(range(len(X)))
-    rng.shuffle(indices)
-    split = int(len(X) * 0.85)
-    train_idx = set(indices[:split])
-    val_idx = set(indices[split:])
-
-    X_train = [X[i] for i in train_idx]
-    y_train = [y[i] for i in train_idx]
-    X_val = [X[i] for i in val_idx]
-    y_val = [y[i] for i in val_idx]
-    print(f"Train: {len(X_train)} sequences, Val: {len(X_val)} sequences")
-
-    # ── Train CRF ─────────────────────────────────────
-    print(f"\nTraining CRF (c1={args.c1}, c2={args.c2}, max_iter={args.max_iter})...")
+    # ── Shuffle ────────────────────────────────────────
     import sklearn_crfsuite
     from sklearn_crfsuite import metrics as crf_metrics
 
-    crf = sklearn_crfsuite.CRF(
-        algorithm="lbfgs",
-        c1=args.c1,
-        c2=args.c2,
-        max_iterations=args.max_iter,
-        all_possible_transitions=True,
-        verbose=False,
-    )
+    rng = random.Random(SEED)
+    indices = list(range(len(X)))
+    rng.shuffle(indices)
 
-    crf.fit(X_train, y_train)
-
-    # ── Evaluate ──────────────────────────────────────
-    y_pred = crf.predict(X_val)
-    labels_present = sorted(set(l for seq in y_val for l in seq))
-
-    print("\n=== CRF Validation Metrics ===")
-    print(f"Sequences: {len(X_val)}, Labels: {labels_present}\n")
-
-    for label in labels_present:
-        tp = sum(
-            1 for seq_true, seq_pred in zip(y_val, y_pred)
-            for t, p in zip(seq_true, seq_pred)
-            if t == label and p == label
+    def train_crf(x_tr, y_tr):
+        crf = sklearn_crfsuite.CRF(
+            algorithm="lbfgs",
+            c1=args.c1,
+            c2=args.c2,
+            max_iterations=args.max_iter,
+            all_possible_transitions=True,
+            verbose=False,
         )
-        fp = sum(
-            1 for seq_true, seq_pred in zip(y_val, y_pred)
-            for t, p in zip(seq_true, seq_pred)
-            if t != label and p == label
-        )
-        fn = sum(
-            1 for seq_true, seq_pred in zip(y_val, y_pred)
-            for t, p in zip(seq_true, seq_pred)
-            if t == label and p != label
-        )
-        precision = tp / (tp + fp) if (tp + fp) > 0 else 0
-        recall = tp / (tp + fn) if (tp + fn) > 0 else 0
-        f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
-        print(f"  {label:<12} P={precision:.4f}  R={recall:.4f}  F1={f1:.4f}  (TP={tp} FP={fp} FN={fn})")
+        crf.fit(x_tr, y_tr)
+        return crf
+
+    def eval_crf(model, x_ev, y_ev):
+        y_pred = model.predict(x_ev)
+        labels = sorted(set(l for seq in y_ev for l in seq))
+        metrics = {}
+        for label in labels:
+            tp = sum(1 for s, p in zip(y_ev, y_pred) for t, p_ in zip(s, p) if t == label and p_ == label)
+            fp = sum(1 for s, p in zip(y_ev, y_pred) for t, p_ in zip(s, p) if t != label and p_ == label)
+            fn = sum(1 for s, p in zip(y_ev, y_pred) for t, p_ in zip(s, p) if t == label and p_ != label)
+            precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+            recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+            f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
+            beta = 5
+            f5 = (1 + beta ** 2) * precision * recall / (beta ** 2 * precision + recall) if (beta ** 2 * precision + recall) > 0 else 0.0
+            metrics[label] = {"precision": precision, "recall": recall, "f1": f1, "f5": f5,
+                              "tp": tp, "fp": fp, "fn": fn}
+        return y_pred, metrics, labels
+
+    def compute_macro(metrics_dict: dict) -> dict:
+        ps, rs, f1s, f5s = [], [], [], []
+        for m in metrics_dict.values():
+            ps.append(m["precision"]); rs.append(m["recall"])
+            f1s.append(m["f1"]); f5s.append(m["f5"])
+        n = len(ps) or 1
+        return {"precision": sum(ps)/n, "recall": sum(rs)/n, "f1": sum(f1s)/n, "f5": sum(f5s)/n}
+
+    if args.kfold > 0:
+        # ── k-fold cross-validation ────────────────────
+        k = args.kfold
+        fold_size = len(indices) // k
+        fold_metrics = []
+
+        print(f"\n=== {k}-Fold Cross-Validation ===")
+        print(f"Total sequences: {len(indices)}, ~{fold_size} per fold")
+
+        for fold in range(k):
+            val_start = fold * fold_size
+            val_end = val_start + fold_size if fold < k - 1 else len(indices)
+            val_idx_set = set(indices[val_start:val_end])
+            train_idx_set = set(indices[:val_start] + indices[val_end:])
+
+            X_tr = [X[i] for i in train_idx_set]
+            y_tr = [y[i] for i in train_idx_set]
+            X_val_fold = [X[i] for i in val_idx_set]
+            y_val_fold = [y[i] for i in val_idx_set]
+
+            print(f"\n--- Fold {fold + 1}/{k}: train={len(X_tr)}, val={len(X_val_fold)} ---")
+            model = train_crf(X_tr, y_tr)
+            # Eval on training set to detect overfitting
+            _, train_m, _ = eval_crf(model, X_tr, y_tr)
+            _, val_m, labels_present = eval_crf(model, X_val_fold, y_val_fold)
+
+            train_macro = compute_macro(train_m)
+            val_macro = compute_macro(val_m)
+            print(f"  Train MACRO: P={train_macro['precision']:.4f} R={train_macro['recall']:.4f} F5={train_macro['f5']:.4f}")
+            print(f"  Val   MACRO: P={val_macro['precision']:.4f} R={val_macro['recall']:.4f} F5={val_macro['f5']:.4f}")
+            print(f"  Gap (R):     {train_macro['recall'] - val_macro['recall']:+.4f}")
+            for label in sorted(val_m):
+                m = val_m[label]
+                print(f"    {label:<12} P={m['precision']:.4f} R={m['recall']:.4f} F5={m['f5']:.4f} (TP={m['tp']} FP={m['fp']} FN={m['fn']})")
+            fold_metrics.append({"fold": fold + 1, "train": train_m, "val": val_m,
+                                  "train_macro": train_macro, "val_macro": val_macro})
+
+        # ── Aggregate across folds ─────────────────────
+        print(f"\n=== Aggregate ({k} folds) ===")
+        all_fold_labels = set()
+        for fm in fold_metrics:
+            all_fold_labels.update(fm["val"].keys())
+        for label in sorted(all_fold_labels):
+            ps, rs, f5s = [], [], []
+            for fm in fold_metrics:
+                if label in fm["val"]:
+                    ps.append(fm["val"][label]["precision"])
+                    rs.append(fm["val"][label]["recall"])
+                    f5s.append(fm["val"][label]["f5"])
+            if ps:
+                print(f"  {label:<12} P={np.mean(ps):.4f}±{np.std(ps):.4f}  R={np.mean(rs):.4f}±{np.std(rs):.4f}  F5={np.mean(f5s):.4f}±{np.std(f5s):.4f}")
+        # Macro
+        macro_ps = [fm["val_macro"]["precision"] for fm in fold_metrics]
+        macro_rs = [fm["val_macro"]["recall"] for fm in fold_metrics]
+        macro_f5s = [fm["val_macro"]["f5"] for fm in fold_metrics]
+        macro_f1s = [fm["val_macro"]["f1"] for fm in fold_metrics]
+        print(f"  {'MACRO':<12} P={np.mean(macro_ps):.4f}±{np.std(macro_ps):.4f}  R={np.mean(macro_rs):.4f}±{np.std(macro_rs):.4f}  F1={np.mean(macro_f1s):.4f}±{np.std(macro_f1s):.4f}  F5={np.mean(macro_f5s):.4f}±{np.std(macro_f5s):.4f}")
+
+        # Train vs validation gap
+        train_macro_rs = [fm["train_macro"]["recall"] for fm in fold_metrics]
+        gaps = [t - v for t, v in zip(train_macro_rs, macro_rs)]
+        print(f"\n  Recall gap (train - val): {np.mean(gaps):.4f}±{np.std(gaps):.4f}")
+
+        if args.save_folds:
+            fold_path = Path(args.output).with_suffix(".folds.json")
+            with open(fold_path, "w") as f:
+                json.dump({"k": k, "folds": fold_metrics,
+                           "aggregate": {"macro": {"precision": float(np.mean(macro_ps)), "recall": float(np.mean(macro_rs)),
+                                                    "f1": float(np.mean(macro_f1s)), "f5": float(np.mean(macro_f5s))},
+                                         "recall_gap": float(np.mean(gaps))}}, f, indent=2)
+            print(f"Folds saved: {fold_path}")
+
+        # Train final model on all data for export
+        print(f"\n=== Final model (trained on all {len(X)} sequences) ===")
+        num_sequences = len(X)
+        crf = train_crf(X, y)
+    else:
+        # ── Single train/val split ─────────────────────
+        split = int(len(X) * (1.0 - args.holdout))
+        train_idx_set = set(indices[:split])
+        val_idx_set = set(indices[split:])
+
+        X_train = [X[i] for i in train_idx_set]
+        y_train = [y[i] for i in train_idx_set]
+        X_val = [X[i] for i in val_idx_set]
+        y_val = [y[i] for i in val_idx_set]
+        print(f"Train: {len(X_train)} sequences, Val: {len(X_val)} sequences")
+
+        print(f"\nTraining CRF (c1={args.c1}, c2={args.c2}, max_iter={args.max_iter})...")
+        num_sequences = len(X_train)
+        crf = train_crf(X_train, y_train)
+
+        y_pred, val_metrics, labels_present = eval_crf(crf, X_val, y_val)
+        print("\n=== CRF Validation Metrics ===")
+        print(f"Sequences: {len(X_val)}, Labels: {labels_present}\n")
+        for label in labels_present:
+            m = val_metrics[label]
+            print(f"  {label:<12} P={m['precision']:.4f}  R={m['recall']:.4f}  F1={m['f1']:.4f}  F5={m['f5']:.4f}  (TP={m['tp']} FP={m['fp']} FN={m['fn']})")
 
     # ── Serialize: dump to temp file, parse manually ──
     import tempfile
@@ -553,8 +822,9 @@ def main():
 
     # Parse STATE_FEATURES
     sf_start = raw.find("STATE_FEATURES = {") + len("STATE_FEATURES = {")
-    sf_end = raw.find("}\n\nTRANSITION_FEATURES")
-    sf_text = raw[sf_start:sf_end]
+    sf_text = raw[sf_start:]
+    sf_end = sf_text.rfind("}")
+    sf_text = sf_text[:sf_end]
 
     num_feats = len(feat_index)
     label_weights = {lbl: [0.0] * num_feats for lbl in CRF_LABELS}
@@ -567,8 +837,8 @@ def main():
             if feat_name in feat_index and label in label_weights:
                 label_weights[label][feat_index[feat_name]] = weight
 
-    # Parse TRANSITION_FEATURES
-    tf_start = raw.find("TRANSITION_FEATURES = {") + len("TRANSITION_FEATURES = {")
+    # Parse TRANSITIONS
+    tf_start = raw.find("TRANSITIONS = {") + len("TRANSITIONS = {")
     tf_text = raw[tf_start:]
     tf_end = tf_text.find("}\n")
     tf_text = tf_text[:tf_end] if tf_end >= 0 else tf_text
@@ -593,7 +863,7 @@ def main():
             "c1": args.c1,
             "c2": args.c2,
             "maxIter": args.max_iter,
-            "numSequences": len(X_train),
+            "numSequences": num_sequences,
             "numFeatures": num_feats,
         },
     }

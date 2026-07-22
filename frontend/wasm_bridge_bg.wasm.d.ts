@@ -2,6 +2,7 @@
 /* eslint-disable */
 export const memory: WebAssembly.Memory;
 export const classify_file: (a: number, b: number) => [number, number, number];
+export const load_crf_model: (a: number, b: number) => [number, number];
 export const load_model: (a: number, b: number) => [number, number];
 export const scan_pii: (a: number, b: number) => [number, number, number];
 export const __wbindgen_malloc: (a: number, b: number) => number;

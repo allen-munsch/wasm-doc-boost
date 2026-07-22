@@ -41,7 +41,7 @@ let completed = 0;
 
 const workerPromises = chunks.map((chunk) =>
   new Promise((resolve, reject) => {
-    const w = new Worker(workerPath, { workerData: { chunk } });
+    const w = new Worker(workerPath, { workerData: { chunk, subdir: 'fatura2' } });
     const results = [];
     w.on('message', (msg) => {
       if (msg.type === 'result') results.push(...msg.data);

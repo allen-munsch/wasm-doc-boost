@@ -24,11 +24,11 @@ from typing import Any
 
 import numpy as np
 import xgboost as xgb
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, StratifiedKFold
 from sklearn.metrics import roc_auc_score, precision_recall_fscore_support
 
 LABEL_NAMES = ["is_document", "is_digital", "is_paper", "is_crumpled", "is_shadow"]
-TREE_PARAMS = {
+BASE_PARAMS: dict[str, Any] = {
     "max_depth": 5,
     "learning_rate": 0.1,
     "n_estimators": 200,
@@ -39,6 +39,35 @@ TREE_PARAMS = {
     "reg_lambda": 1.0,
     "eval_metric": "auc",
 }
+
+# Per-label overrides for rare classes (prevents memorization)
+LABEL_PARAMS: dict[str, dict[str, Any]] = {
+    "is_crumpled": {
+        "max_depth": 3,
+        "n_estimators": 80,
+        "reg_alpha": 0.5,
+        "reg_lambda": 5.0,
+        "min_child_weight": 3,
+        "subsample": 0.7,
+        "colsample_bytree": 0.7,
+    },
+    "is_shadow": {
+        "max_depth": 3,
+        "n_estimators": 80,
+        "reg_alpha": 0.5,
+        "reg_lambda": 5.0,
+        "min_child_weight": 3,
+        "subsample": 0.7,
+        "colsample_bytree": 0.7,
+    },
+}
+
+
+def _params_for(name: str) -> dict[str, Any]:
+    """Merge base params with per-label overrides."""
+    p = dict(BASE_PARAMS)
+    p.update(LABEL_PARAMS.get(name, {}))
+    return p
 
 
 def load_data(npz_path: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -72,18 +101,19 @@ def train_models(X_train: np.ndarray, y_train: np.ndarray) -> list[xgb.XGBClassi
         scale_pos_weight = neg / max(pos, 1) if pos > 0 else 1.0
         scale_pos_weight = min(scale_pos_weight, 20.0)  # cap for extreme imbalance
 
+        params = _params_for(name)
         model = xgb.XGBClassifier(
             tree_method="hist",
             objective="binary:logistic",
             scale_pos_weight=scale_pos_weight,
-            max_depth=TREE_PARAMS["max_depth"],
-            learning_rate=TREE_PARAMS["learning_rate"],
-            n_estimators=TREE_PARAMS["n_estimators"],
-            subsample=TREE_PARAMS["subsample"],
-            colsample_bytree=TREE_PARAMS["colsample_bytree"],
-            min_child_weight=TREE_PARAMS["min_child_weight"],
-            reg_alpha=TREE_PARAMS["reg_alpha"],
-            reg_lambda=TREE_PARAMS["reg_lambda"],
+            max_depth=params["max_depth"],
+            learning_rate=params["learning_rate"],
+            n_estimators=params["n_estimators"],
+            subsample=params["subsample"],
+            colsample_bytree=params["colsample_bytree"],
+            min_child_weight=params["min_child_weight"],
+            reg_alpha=params["reg_alpha"],
+            reg_lambda=params["reg_lambda"],
             eval_metric="auc",
             random_state=42,
             n_jobs=-1,
@@ -112,6 +142,121 @@ def evaluate(models: list[xgb.XGBClassifier], X_test: np.ndarray,
         pos = y_test[:, i].sum()
         print(f"  {name}: AUC={auc:.4f}, P={precision:.3f}, R={recall:.3f}, "
               f"F1={f1:.3f} (pos={int(pos)})")
+    return metrics
+
+
+def kfold_cv(X: np.ndarray, y: np.ndarray, k: int = 5) -> dict[str, Any]:
+    """Stratified k-fold cross-validation with train vs val comparison.
+
+    Stratifies on label-combination keys so rare classes (crumpled, shadow)
+    appear in every fold proportionally.
+    """
+    # Composite strata: unique label combination → class index
+    label_keys = y.dot(1 << np.arange(y.shape[1])).astype(int)
+    skf = StratifiedKFold(n_splits=k, shuffle=True, random_state=42)
+
+    # Per-label accumulators: train_metrics and val_metrics per fold
+    fold_results = []
+    for fold_idx, (train_idx, val_idx) in enumerate(skf.split(X, label_keys)):
+        X_tr, X_val = X[train_idx], X[val_idx]
+        y_tr, y_val = y[train_idx], y[val_idx]
+
+        print(f"\n--- Fold {fold_idx + 1}/{k}: train={len(X_tr)}, val={len(X_val)} ---")
+        models = train_models(X_tr, y_tr)
+
+        train_metrics = _eval_split(models, X_tr, y_tr, "Train")
+        val_metrics = _eval_split(models, X_val, y_val, "Val")
+
+        fold_results.append({
+            "fold": fold_idx + 1,
+            "train_size": len(X_tr),
+            "val_size": len(X_val),
+            "train": train_metrics,
+            "val": val_metrics,
+        })
+
+    # Aggregate across folds: mean ± std per label per metric
+    def _aggregate(key: str) -> dict:
+        out = {}
+        for name in LABEL_NAMES:
+            vals = [f[key][name]["auc"] for f in fold_results]
+            out[name] = {
+                "auc_mean": float(np.mean(vals)),
+                "auc_std": float(np.std(vals, ddof=1)),
+                "auc_min": float(np.min(vals)),
+                "auc_max": float(np.max(vals)),
+            }
+            # F5 for binary classification: (1+25)*P*R / (25*P + R)
+            for metric in ["precision", "recall", "f1"]:
+                vals = [f[key][name][metric] for f in fold_results]
+                out[name][f"{metric}_mean"] = float(np.mean(vals))
+                out[name][f"{metric}_std"] = float(np.std(vals, ddof=1))
+
+            # F5
+            f5_vals = []
+            for f in fold_results:
+                p = f[key][name]["precision"]
+                r = f[key][name]["recall"]
+                f5 = (26 * p * r) / (25 * p + r) if (p + r) > 0 else 0.0
+                f5_vals.append(f5)
+            out[name]["f5_mean"] = float(np.mean(f5_vals))
+            out[name]["f5_std"] = float(np.std(f5_vals, ddof=1))
+
+        return out
+
+    train_agg = _aggregate("train")
+    val_agg = _aggregate("val")
+
+    # Overfitting gap: val - train delta per label
+    print("\n=== K-Fold Summary (mean ± std) ===")
+    print(f"{'Label':<14} {'Split':<6} {'AUC':<22} {'F5':<22} {'Recall':<22} {'Precision':<22}")
+    print("-" * 108)
+    for name in LABEL_NAMES:
+        t = train_agg[name]
+        v = val_agg[name]
+        auc_gap = v["auc_mean"] - t["auc_mean"]
+        f5_gap = v["f5_mean"] - t["f5_mean"]
+        rec_gap = v["recall_mean"] - t["recall_mean"]
+        print(f"{name:<14} {'Train':<6} "
+              f"{t['auc_mean']:.4f}±{t['auc_std']:.4f}     "
+              f"{t['f5_mean']:.4f}±{t['f5_std']:.4f}     "
+              f"{t['recall_mean']:.4f}±{t['recall_std']:.4f}   "
+              f"{t['precision_mean']:.4f}±{t['precision_std']:.4f}")
+        print(f"{'':<14} {'Val':<6} "
+              f"{v['auc_mean']:.4f}±{v['auc_std']:.4f}     "
+              f"{v['f5_mean']:.4f}±{v['f5_std']:.4f}     "
+              f"{v['recall_mean']:.4f}±{v['recall_std']:.4f}   "
+              f"{v['precision_mean']:.4f}±{v['precision_std']:.4f}")
+        gap_marker = " <-- OVERFIT?" if (rec_gap < -0.02 or f5_gap < -0.02) else ""
+        print(f"{'':<14} {'Gap':<6} "
+              f"{auc_gap:+.4f}             "
+              f"{f5_gap:+.4f}             "
+              f"{rec_gap:+.4f}           "
+              f"{v['precision_mean'] - t['precision_mean']:+.4f}{gap_marker}")
+
+    return {
+        "k": k,
+        "n_samples": len(X),
+        "n_features": X.shape[1],
+        "folds": fold_results,
+        "train_aggregate": train_agg,
+        "val_aggregate": val_agg,
+    }
+
+
+def _eval_split(models: list[xgb.XGBClassifier], X: np.ndarray,
+                 y: np.ndarray, tag: str) -> dict[str, Any]:
+    """Evaluate models on a split, print summary."""
+    metrics = {}
+    for i, name in enumerate(LABEL_NAMES):
+        y_pred_proba = models[i].predict_proba(X)[:, 1]
+        y_pred = (y_pred_proba >= 0.5).astype(int)
+        auc = roc_auc_score(y[:, i], y_pred_proba)
+        precision, recall, f1, _ = precision_recall_fscore_support(
+            y[:, i], y_pred, average="binary", zero_division=0
+        )
+        metrics[name] = {"auc": auc, "precision": precision,
+                         "recall": recall, "f1": f1}
     return metrics
 
 
@@ -153,9 +298,21 @@ def main():
                         help="Output JSON model path")
     parser.add_argument("--report", default="data/report.json",
                         help="Evaluation report path")
+    parser.add_argument("--kfold", type=int, default=0,
+                        help="Run k-fold CV (e.g., --kfold 5); skips model export")
     args = parser.parse_args()
 
     X, y, filenames = load_data(args.features)
+
+    if args.kfold > 0:
+        print(f"\n=== {args.kfold}-Fold Cross-Validation ===")
+        cv_report = kfold_cv(X, y, k=args.kfold)
+        if args.report:
+            with open(args.report, "w") as f:
+                json.dump(cv_report, f, indent=2)
+            print(f"\nCV report written: {args.report}")
+        return
+
     X_train, X_test, y_train, y_test = split_data(X, y)
 
     print("\n=== Training ===")
