@@ -6,17 +6,21 @@ mod gbdt;
 
 static MODEL: Mutex<Option<gbdt::Model>> = Mutex::new(None);
 
-const LABELS: [&str; 5] = [
+const LABELS: [&str; 9] = [
     "is_document",
     "is_digital",
     "is_paper",
     "is_crumpled",
     "is_shadow",
+    "rotation_0",
+    "rotation_90",
+    "rotation_180",
+    "rotation_270",
 ];
 
 #[wasm_bindgen]
 pub fn load_model(json: &str) -> Result<(), JsValue> {
-    let model = gbdt::Model::from_xgboost_json(json, 5)
+    let model = gbdt::Model::from_xgboost_json(json, 9)
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
     let mut guard = MODEL.lock().unwrap();
     *guard = Some(model);
@@ -177,6 +181,7 @@ fn resize_max_edge(img: image::DynamicImage, max_edge: u32) -> image::DynamicIma
 }
 
 fn extract_all(pixels: &[u8], width: usize, height: usize) -> Vec<f64> {
+    let gray = features_core::to_grayscale(pixels, width, height);
     let mut features = Vec::new();
 
     features.extend(features_core::color::per_channel_stats(pixels, width, height));
@@ -184,30 +189,35 @@ fn extract_all(pixels: &[u8], width: usize, height: usize) -> Vec<f64> {
     features.push(features_core::color::colorfulness(pixels, width, height));
     features.extend(features_core::color::saturation_stats(pixels, width, height));
 
-    features.push(features_core::edges::laplacian_variance(pixels, width, height));
-    features.extend(features_core::edges::sobel_stats(pixels, width, height));
-    features.push(features_core::edges::edge_density(pixels, width, height));
-    features.extend(features_core::edges::edge_direction_histogram(pixels, width, height));
-    features.push(features_core::edges::hv_edge_ratio(pixels, width, height));
-    features.push(features_core::edges::canny_edge_density(pixels, width, height));
+    let sobel = features_core::edges::sobel(&gray, width, height);
+    features.push(features_core::edges::laplacian_variance(&gray, width, height));
+    features.extend(features_core::edges::sobel_stats(&sobel));
+    features.push(features_core::edges::edge_density(&sobel));
+    features.extend(features_core::edges::edge_direction_histogram(&sobel));
+    features.push(features_core::edges::hv_edge_ratio(&sobel));
+    features.push(features_core::edges::canny_edge_density(&sobel));
+    features.extend(features_core::edges::structure_tensor_features(&sobel));
+    features.extend(features_core::edges::sobel_circular_stats(&sobel));
 
-    features.push(features_core::texture::dct_low_freq_ratio(pixels, width, height));
-    features.extend(features_core::texture::lbp_histogram(pixels, width, height));
-    features.extend(features_core::texture::glcm_features(pixels, width, height));
-    features.push(features_core::texture::fractal_dimension(pixels, width, height));
+    features.push(features_core::texture::dct_low_freq_ratio(&gray, width, height));
+    features.extend(features_core::texture::lbp_histogram(&gray, width, height));
+    features.extend(features_core::texture::glcm_features(&gray, width, height));
+    features.push(features_core::texture::fractal_dimension(&gray, width, height));
 
-    features.push(features_core::noise::high_pass_residual_variance(pixels, width, height));
-    features.extend(features_core::noise::jpeg_blockiness(pixels, width, height));
-    features.push(features_core::noise::gradient_snr(pixels, width, height));
+    features.push(features_core::noise::high_pass_residual_variance(&gray, width, height));
+    features.extend(features_core::noise::jpeg_blockiness(&gray, width, height));
+    features.push(features_core::noise::gradient_snr(&gray, width, height));
 
-    features.extend(features_core::shadow::shadow_features(pixels, width, height));
+    features.extend(features_core::shadow::shadow_features(&gray, width, height));
 
-    features.extend(features_core::crumple::lbp_variance(pixels, width, height));
-    features.push(features_core::crumple::edge_density_std(pixels, width, height));
-    features.push(features_core::crumple::texture_anisotropy(pixels, width, height));
-    features.push(features_core::crumple::peak_local_entropy(pixels, width, height));
+    features.extend(features_core::crumple::lbp_variance(&gray, width, height));
+    features.push(features_core::crumple::edge_density_std(&gray, width, height));
+    features.push(features_core::crumple::texture_anisotropy(&gray, width, height));
+    features.push(features_core::crumple::peak_local_entropy(&gray, width, height));
 
     features.extend(features_core::document::document_features(pixels, width, height));
+    features.extend(features_core::projection::projection_features(&gray, width, height));
+    features.extend(features_core::ink::ink_features(&gray, width, height));
 
     features
 }
@@ -244,9 +254,13 @@ mod tests {
     use super::*;
     use wasm_bindgen_test::*;
 
-    /// Trivial 5-label model: one tree per label, each always returning leaf 0.0
+    /// Trivial 9-label model: one tree per label, each always returning leaf 0.0
     /// → sigmoid(0.0) = 0.5 for every label.
     const TRIVIAL_MODEL_JSON: &str = r#"[
+        [{"nodeid": 0, "depth": 0, "leaf": 0.0}],
+        [{"nodeid": 0, "depth": 0, "leaf": 0.0}],
+        [{"nodeid": 0, "depth": 0, "leaf": 0.0}],
+        [{"nodeid": 0, "depth": 0, "leaf": 0.0}],
         [{"nodeid": 0, "depth": 0, "leaf": 0.0}],
         [{"nodeid": 0, "depth": 0, "leaf": 0.0}],
         [{"nodeid": 0, "depth": 0, "leaf": 0.0}],
@@ -268,13 +282,14 @@ mod tests {
     }
 
     #[wasm_bindgen_test]
-    fn test_classify_file_returns_five_labels() {
+    fn test_classify_file_returns_nine_labels() {
         load_model(TRIVIAL_MODEL_JSON).unwrap();
 
         let png_bytes = create_test_image();
         let result = classify_file(&png_bytes).unwrap();
 
-        let labels = ["is_document", "is_digital", "is_paper", "is_crumpled", "is_shadow"];
+        let labels = ["is_document", "is_digital", "is_paper", "is_crumpled", "is_shadow",
+                       "rotation_0", "rotation_90", "rotation_180", "rotation_270"];
         for label in &labels {
             let val = js_sys::Reflect::get(&result, &JsValue::from_str(label))
                 .unwrap()
@@ -317,6 +332,6 @@ mod tests {
     fn test_feature_count() {
         let pixels = vec![128u8; 64 * 64 * 3];
         let feats = extract_all(&pixels, 64, 64);
-        assert_eq!(feats.len(), 81, "expected 81 features, got {}", feats.len());
+        assert_eq!(feats.len(), 103, "expected 103 features, got {}", feats.len());
     }
 }

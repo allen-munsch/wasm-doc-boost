@@ -3,119 +3,118 @@
 Export pixel features from a labelled image dataset.
 
 Usage:
-    python scripts/export_features.py \\
-        --images /path/to/images/ \\
-        --labels labels.csv \\
-        --output features.npz
+    PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 python scripts/export_features.py \\
+        --images data/images --labels data/labels.csv --output data/features_v3.npz
 
-Labels CSV format:
-    filename,is_document,is_digital,is_paper,is_crumpled,is_shadow
-    img_001.jpg,1,0,1,0,0
-    img_002.png,1,1,0,0,0
-    ...
+Each image is augmented with 90, 180, and 270 degree rotations, producing 4
+samples per original image. Rotation labels are mutually exclusive.
 
-Output format:
-    .npz file containing:
-      - features: float64 array of shape (N, 78)
-      - labels: int8 array of shape (N, 5)
-      - filenames: str array of shape (N,)
-      - label_names: ['is_document', 'is_digital', 'is_paper', 'is_crumpled', 'is_shadow']
-
-Set PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 if using Python > 3.13.
+Output: .npz with features (N*4, 103), labels (N*4, 9), filenames (N*4,).
 """
 
 import argparse
 import csv
 import os
 import sys
+import multiprocessing as mp
+from concurrent.futures import ProcessPoolExecutor
 
 import numpy as np
 from PIL import Image
 
 import py_features
 
-LABEL_NAMES = ["is_document", "is_digital", "is_paper", "is_crumpled", "is_shadow"]
+LABEL_NAMES = ["is_document", "is_digital", "is_paper", "is_crumpled", "is_shadow",
+                "rotation_0", "rotation_90", "rotation_180", "rotation_270"]
+CSV_LABEL_NAMES = ["is_document", "is_digital", "is_paper", "is_crumpled", "is_shadow"]
+ROTATION_ANGLES = [0, 90, 180, 270]
 MAX_LONG_EDGE = 512
 
 
-def load_labels(path: str) -> dict[str, list[int]]:
-    """Parse labels CSV into {filename: [label_values]}."""
-    labels: dict[str, list[int]] = {}
+def load_labels(path):
+    labels = {}
     with open(path, newline="") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            fname = row["filename"]
-            labels[fname] = [int(row[name]) for name in LABEL_NAMES]
+        for row in csv.DictReader(f):
+            labels[row["filename"]] = [int(row[name]) for name in CSV_LABEL_NAMES]
     return labels
 
 
-def resize_image(img: Image.Image) -> Image.Image:
-    """Resize so the long edge is at most MAX_LONG_EDGE pixels."""
-    w, h = img.size
-    long_edge = max(w, h)
-    if long_edge <= MAX_LONG_EDGE:
-        return img
-    scale = MAX_LONG_EDGE / long_edge
-    new_w, new_h = int(w * scale), int(h * scale)
-    return img.resize((new_w, new_h), Image.LANCZOS)
+def _process_image(args):
+    """Process one image: resize, rotate 4 ways, extract 103 features.
 
+    Module-level function for ProcessPoolExecutor pickling.
+    Returns (feats_4x103, labels_4x9, fnames_4) or None on error.
+    """
+    fname, label_vec, images_dir = args
+    img_path = os.path.join(images_dir, fname)
+    if not os.path.exists(img_path):
+        return None
 
-def extract_features(img: Image.Image) -> np.ndarray:
-    """Extract 78 features from a PIL RGB image."""
-    rgb = img.convert("RGB")
-    w, h = rgb.size
-    pixels = np.array(rgb, dtype=np.uint8).tobytes()
-    feats = py_features.extract_all(pixels, w, h)
-    return np.array(feats, dtype=np.float64)
+    try:
+        img = Image.open(img_path)
+        w, h = img.size
+        long_edge = max(w, h)
+        if long_edge > MAX_LONG_EDGE:
+            scale = MAX_LONG_EDGE / long_edge
+            img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+
+        feats_list, labels_list, fnames_list = [], [], []
+        for rot_idx, angle in enumerate(ROTATION_ANGLES):
+            rotated = img if angle == 0 else img.rotate(-angle, expand=True, resample=Image.BICUBIC)
+            rgb = rotated.convert("RGB")
+            rw, rh = rgb.size
+            pixels = np.array(rgb, dtype=np.uint8).tobytes()
+            feats = py_features.extract_all(pixels, rw, rh)
+            rotation_labels = [0, 0, 0, 0]
+            rotation_labels[rot_idx] = 1
+            feats_list.append(feats)
+            labels_list.append(label_vec + rotation_labels)
+            fnames_list.append(f"{fname}_rot{angle}")
+        return (feats_list, labels_list, fnames_list)
+    except Exception:
+        return None
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Export pixel features from labelled images")
-    parser.add_argument("--images", required=True, help="Directory containing image files")
-    parser.add_argument("--labels", required=True, help="CSV file with labels")
-    parser.add_argument("--output", required=True, help="Output .npz file path")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--images", required=True)
+    parser.add_argument("--labels", required=True)
+    parser.add_argument("--output", required=True)
+    parser.add_argument("--workers", type=int, default=0)
     args = parser.parse_args()
 
     labels = load_labels(args.labels)
-    print(f"Loaded {len(labels)} labelled images")
+    print(f"Loaded {len(labels)} images", flush=True)
 
-    feature_list = []
-    label_list = []
-    filename_list = []
-    missing = 0
-    errors = 0
+    tasks = [(fname, labels[fname], args.images) for fname in labels]
+    n_workers = args.workers if args.workers > 0 else mp.cpu_count()
+    n_workers = min(n_workers, len(tasks))
+    print(f"Using {n_workers} workers", flush=True)
 
-    for i, (fname, label_vec) in enumerate(labels.items()):
-        img_path = os.path.join(args.images, fname)
-        if not os.path.exists(img_path):
-            missing += 1
-            continue
+    feature_list, label_list, filename_list = [], [], []
+    errors, processed = 0, 0
 
-        try:
-            img = Image.open(img_path)
-            img = resize_image(img)
-            feats = extract_features(img)
-            feature_list.append(feats)
-            label_list.append(label_vec)
-            filename_list.append(fname)
-        except Exception as e:
-            errors += 1
-            continue
-
-        if (i + 1) % 500 == 0:
-            print(f"  {i + 1}/{len(labels)} processed ({missing} missing, {errors} errors)",
-                  flush=True)
+    ctx = mp.get_context("fork")
+    with ProcessPoolExecutor(max_workers=n_workers, mp_context=ctx) as executor:
+        for result in executor.map(_process_image, tasks, chunksize=20):
+            processed += 1
+            if result is None:
+                errors += 1
+            else:
+                feats, lbls, fnames = result
+                feature_list.extend(feats)
+                label_list.extend(lbls)
+                filename_list.extend(fnames)
+            if processed % 500 == 0:
+                print(f"  {processed}/{len(tasks)} ({errors} errors)", flush=True)
 
     if not feature_list:
-        print("No images processed. Exiting.")
+        print("No features extracted. Exiting.", flush=True)
         sys.exit(1)
 
-    features = np.stack(feature_list, axis=0)
+    features = np.array(feature_list, dtype=np.float64)
     labels_arr = np.array(label_list, dtype=np.int8)
-
-    print(f"Processed {len(feature_list)} images ({missing} missing, {errors} errors)")
-    print(f"Features shape: {features.shape} (dtype={features.dtype})")
-    print(f"Labels shape: {labels_arr.shape} (dtype={labels_arr.dtype})")
+    print(f"Done: {features.shape[0]} samples, {errors} errors", flush=True)
 
     np.savez_compressed(
         args.output,
@@ -124,8 +123,7 @@ def main():
         filenames=np.array(filename_list),
         label_names=np.array(LABEL_NAMES),
     )
-    file_size = os.path.getsize(args.output)
-    print(f"Wrote {args.output} ({file_size / 1024:.1f} KB)")
+    print(f"Wrote {args.output} ({os.path.getsize(args.output) / 1024:.0f} KB)", flush=True)
 
 
 if __name__ == "__main__":
