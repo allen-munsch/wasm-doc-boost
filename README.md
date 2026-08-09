@@ -207,6 +207,23 @@ For clean digital receipts, rotation detection is solved (99.7% F1). For photogr
 
 v4 adds 9 ink-mask features: ink coverage, mean intensity, horizontal/vertical run-length statistics (mean, std, entropy), and a Docstrum-inspired nearest-neighbor rotation angle. The Sobel gradient passes were also refactored — all edge features now share a single Sobel computation, and the inner loop uses a pre-padded buffer with flat indexing rather than per-pixel border clamping. This is faster (1 Sobel pass instead of 7) and enables LLVM auto-vectorization when built with `RUSTFLAGS="-C target-feature=+simd128"`.
 
+## Performance
+
+The Sobel gradient computation — the most expensive single pass in the feature pipeline — was optimized with WASM SIMD128 intrinsics (`f64x2`). The SIMD path processes 2 pixels per inner-loop iteration instead of 1.
+
+| Image Size  | Scalar (µs) | SIMD (µs) | Speedup | SIMD Throughput |
+|-------------|-------------|-----------|---------|-----------------|
+| 256×256     | 1,830       | 1,684     | 1.09×   | 38.9 Mpix/s     |
+| 512×512     | 7,345       | 6,915     | 1.06×   | 37.9 Mpix/s     |
+| 1024×768    | 22,670      | 21,110    | 1.07×   | 37.3 Mpix/s     |
+| 1920×1080   | 59,267      | 54,433    | 1.09×   | 38.1 Mpix/s     |
+
+Measured on Node.js v24.12.0 (V8 13.6) with the same synthetic sine-wave image for both paths. The SIMD speedup is modest (1.06–1.09×) because `sqrt` and `atan2` — which dominate the Sobel inner loop — remain scalar. The gradient arithmetic (loads, adds, muls) benefits fully from 2-wide SIMD, but the overall win is diluted by the transcendental operations and the shared `pad_gray()` allocation.
+
+The scalar path is used for native (py-features via PyO3) and serves as the fallback when WASM SIMD128 is unavailable. Both paths produce bit-identical results — verified by comparing `gx`, `gy`, `magnitudes`, and `orientations` element-by-element across a 256×256 test image.
+
+Combined with Sobel-pass sharing (one `SobelResult` instead of seven independent Sobel calls), the end-to-end feature extraction speedup over v3 is approximately 3–4× on WASM and 2–3× on native.
+
 ## Where It Fails (And Why)
 
 - **Photographed crumpled paper** — illumination gradients look like shadows to the Sobel-based features. The edge-density and Otsu-threshold features can't distinguish a fold from vignetting. Solution: more training data, not more features.

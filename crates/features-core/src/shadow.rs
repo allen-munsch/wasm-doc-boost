@@ -1,26 +1,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 use libm::sqrt;
-
-/// Convert RGB pixels to grayscale f64 values.
-fn to_grayscale(pixels: &[u8], width: usize, height: usize) -> Vec<f64> {
-    let n = width * height;
-    let mut gray = Vec::with_capacity(n);
-    for i in 0..n {
-        let r = pixels[i * 3] as f64;
-        let g = pixels[i * 3 + 1] as f64;
-        let b = pixels[i * 3 + 2] as f64;
-        gray.push(0.299 * r + 0.587 * g + 0.114 * b);
-    }
-    gray
-}
-
-/// Get pixel at (x, y), clamping to border.
-fn pixel_at(gray: &[f64], width: usize, height: usize, x: isize, y: isize) -> f64 {
-    let x = x.clamp(0, width as isize - 1) as usize;
-    let y = y.clamp(0, height as isize - 1) as usize;
-    gray[y * width + x]
-}
+use crate::pixel_at;
 
 // ---------------------------------------------------------------------------
 // 2e: Shadow & illumination features
@@ -87,11 +68,10 @@ fn morph_erode(gray: &[f64], width: usize, height: usize, radius: usize) -> Vec<
 /// - shadow_depth_mean: mean of negative deviations (illum − original)
 /// - shadow_depth_std: std of negative deviations
 /// - shadow_edge_magnitude: mean Sobel magnitude on illumination field
-pub fn shadow_features(pixels: &[u8], width: usize, height: usize) -> Vec<f64> {
-    let gray = to_grayscale(pixels, width, height);
+pub fn shadow_features(gray: &[f64], width: usize, height: usize) -> Vec<f64> {
     let radius = if width.min(height) >= 21 { 10 } else { (width.min(height) as f64 * 0.1) as usize };
     let radius = radius.max(1);
-    let illum = morphological_closing(&gray, width, height, radius);
+    let illum = morphological_closing(gray, width, height, radius);
     let n = gray.len() as f64;
 
     // Dark region ratio
