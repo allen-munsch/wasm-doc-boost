@@ -1,26 +1,6 @@
-use alloc::vec;
 use alloc::vec::Vec;
 use libm::sqrt;
-
-/// Convert RGB pixels to grayscale f64 values.
-fn to_grayscale(pixels: &[u8], width: usize, height: usize) -> Vec<f64> {
-    let n = width * height;
-    let mut gray = Vec::with_capacity(n);
-    for i in 0..n {
-        let r = pixels[i * 3] as f64;
-        let g = pixels[i * 3 + 1] as f64;
-        let b = pixels[i * 3 + 2] as f64;
-        gray.push(0.299 * r + 0.587 * g + 0.114 * b);
-    }
-    gray
-}
-
-/// Get pixel at (x, y), clamping to border.
-fn pixel_at(gray: &[f64], width: usize, height: usize, x: isize, y: isize) -> f64 {
-    let x = x.clamp(0, width as isize - 1) as usize;
-    let y = y.clamp(0, height as isize - 1) as usize;
-    gray[y * width + x]
-}
+use crate::pixel_at;
 
 // ---------------------------------------------------------------------------
 // 2f: Crumple detection features
@@ -28,8 +8,7 @@ fn pixel_at(gray: &[f64], width: usize, height: usize, x: isize, y: isize) -> f6
 
 /// LBP variance: compute LBP for each pixel, weight bins by local variance.
 /// Returns LBP histogram bin values weighted by local variance.
-pub fn lbp_variance(pixels: &[u8], width: usize, height: usize) -> Vec<f64> {
-    let gray = to_grayscale(pixels, width, height);
+pub fn lbp_variance(gray: &[f64], width: usize, height: usize) -> Vec<f64> {
     if width < 3 || height < 3 {
         return alloc::vec![0.0; 10];
     }
@@ -118,8 +97,7 @@ fn count_transitions(pattern: u8) -> u32 {
 }
 
 /// Edge density standard deviation across 8×8 grid cells.
-pub fn edge_density_std(pixels: &[u8], width: usize, height: usize) -> f64 {
-    let gray = to_grayscale(pixels, width, height);
+pub fn edge_density_std(gray: &[f64], width: usize, height: usize) -> f64 {
     let cell_w = (width / 8).max(1);
     let cell_h = (height / 8).max(1);
 
@@ -171,8 +149,7 @@ pub fn edge_density_std(pixels: &[u8], width: usize, height: usize) -> f64 {
 }
 
 /// Texture anisotropy: ratio of GLCM contrast in vertical vs. horizontal direction.
-pub fn texture_anisotropy(pixels: &[u8], width: usize, height: usize) -> f64 {
-    let gray = to_grayscale(pixels, width, height);
+pub fn texture_anisotropy(gray: &[f64], width: usize, height: usize) -> f64 {
 
     // Quantize to 16 levels
     let min_val = gray.iter().cloned().fold(f64::INFINITY, f64::min);
@@ -238,8 +215,7 @@ fn glcm_contrast(
 
 /// Peak local entropy: divide image into small tiles, compute entropy per tile,
 /// return max/min ratio.
-pub fn peak_local_entropy(pixels: &[u8], width: usize, height: usize) -> f64 {
-    let gray = to_grayscale(pixels, width, height);
+pub fn peak_local_entropy(gray: &[f64], width: usize, height: usize) -> f64 {
     let tile_size = (width.min(height) / 8).max(4);
 
     let tiles_x = width / tile_size;
@@ -297,15 +273,8 @@ mod tests {
     use super::*;
     use alloc::vec;
 
-    fn solid_128(w: usize, h: usize) -> Vec<u8> {
-        let n = w * h;
-        let mut p = Vec::with_capacity(n * 3);
-        for _ in 0..n {
-            p.push(128);
-            p.push(128);
-            p.push(128);
-        }
-        p
+    fn solid_128(w: usize, h: usize) -> Vec<f64> {
+        vec![128.0; w * h]
     }
 
     #[test]
