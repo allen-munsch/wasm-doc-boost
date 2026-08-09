@@ -1,26 +1,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 use libm::{cos, log2, sqrt};
-
-/// Convert RGB pixels to grayscale f64 values.
-fn to_grayscale(pixels: &[u8], width: usize, height: usize) -> Vec<f64> {
-    let n = width * height;
-    let mut gray = Vec::with_capacity(n);
-    for i in 0..n {
-        let r = pixels[i * 3] as f64;
-        let g = pixels[i * 3 + 1] as f64;
-        let b = pixels[i * 3 + 2] as f64;
-        gray.push(0.299 * r + 0.587 * g + 0.114 * b);
-    }
-    gray
-}
-
-/// Get grayscale pixel at (x, y), clamping to border.
-fn pixel_at(gray: &[f64], width: usize, height: usize, x: isize, y: isize) -> f64 {
-    let x = x.clamp(0, width as isize - 1) as usize;
-    let y = y.clamp(0, height as isize - 1) as usize;
-    gray[y * width + x]
-}
+use crate::pixel_at;
 
 // ---------------------------------------------------------------------------
 // 2c-a: Block-wise 8×8 DCT energy
@@ -29,8 +10,7 @@ fn pixel_at(gray: &[f64], width: usize, height: usize, x: isize, y: isize) -> f6
 /// Low-frequency energy ratio from block-wise 8×8 DCT.
 /// Divides image into 8×8 blocks, applies DCT-II, computes ratio of
 /// low-freq energy (first 3 zig-zag coeffs) to total, averaged over blocks.
-pub fn dct_low_freq_ratio(pixels: &[u8], width: usize, height: usize) -> f64 {
-    let gray = to_grayscale(pixels, width, height);
+pub fn dct_low_freq_ratio(gray: &[f64], width: usize, height: usize) -> f64 {
     let blocks_x = width / 8;
     let blocks_y = height / 8;
     if blocks_x == 0 || blocks_y == 0 {
@@ -122,8 +102,7 @@ fn dct_8x8(block: &[f64; 64], _stride: usize) -> [f64; 64] {
 
 /// Rotation-invariant uniform LBP histogram (10 bins).
 /// Bin 0-8: uniform patterns (0-8 transitions), Bin 9: non-uniform.
-pub fn lbp_histogram(pixels: &[u8], width: usize, height: usize) -> Vec<f64> {
-    let gray = to_grayscale(pixels, width, height);
+pub fn lbp_histogram(gray: &[f64], width: usize, height: usize) -> Vec<f64> {
     if width < 3 || height < 3 {
         return vec![0.0; 10];
     }
@@ -133,16 +112,16 @@ pub fn lbp_histogram(pixels: &[u8], width: usize, height: usize) -> Vec<f64> {
 
     for y in 1..height as isize - 1 {
         for x in 1..width as isize - 1 {
-            let center = pixel_at(&gray, width, height, x, y);
+            let center = pixel_at(gray, width, height, x, y);
             let neighbors = [
-                pixel_at(&gray, width, height, x, y - 1),
-                pixel_at(&gray, width, height, x + 1, y - 1),
-                pixel_at(&gray, width, height, x + 1, y),
-                pixel_at(&gray, width, height, x + 1, y + 1),
-                pixel_at(&gray, width, height, x, y + 1),
-                pixel_at(&gray, width, height, x - 1, y + 1),
-                pixel_at(&gray, width, height, x - 1, y),
-                pixel_at(&gray, width, height, x - 1, y - 1),
+                pixel_at(gray, width, height, x, y - 1),
+                pixel_at(gray, width, height, x + 1, y - 1),
+                pixel_at(gray, width, height, x + 1, y),
+                pixel_at(gray, width, height, x + 1, y + 1),
+                pixel_at(gray, width, height, x, y + 1),
+                pixel_at(gray, width, height, x - 1, y + 1),
+                pixel_at(gray, width, height, x - 1, y),
+                pixel_at(gray, width, height, x - 1, y - 1),
             ];
 
             let mut pattern: u8 = 0;
@@ -254,9 +233,8 @@ fn quantize(values: &[f64], levels: usize) -> Vec<usize> {
 
 /// GLCM features: contrast, correlation, energy, homogeneity.
 /// Computed on a downscaled thumbnail (max 64px), 5-pixel offset, 4 directions, averaged.
-pub fn glcm_features(pixels: &[u8], width: usize, height: usize) -> Vec<f64> {
-    let gray = to_grayscale(pixels, width, height);
-    let thumb = downscale_gray(&gray, width, height, 64);
+pub fn glcm_features(gray: &[f64], width: usize, height: usize) -> Vec<f64> {
+    let thumb = downscale_gray(gray, width, height, 64);
     // Derive tw from actual thumb dimensions to avoid f64 rounding mismatch
     let scale = 64.0 / width.max(height) as f64;
     let tw = (width as f64 * scale) as usize;
@@ -381,17 +359,16 @@ pub fn glcm_features(pixels: &[u8], width: usize, height: usize) -> Vec<f64> {
 // ---------------------------------------------------------------------------
 
 /// Approximate fractal dimension via box-counting on edge map.
-pub fn fractal_dimension(pixels: &[u8], width: usize, height: usize) -> f64 {
-    let gray = to_grayscale(pixels, width, height);
+pub fn fractal_dimension(gray: &[f64], width: usize, height: usize) -> f64 {
 
     // Simple edge map: threshold gradient magnitude
     let mut edge_map = vec![false; width * height];
     for y in 1..height as isize - 1 {
         for x in 1..width as isize - 1 {
-            let gx = pixel_at(&gray, width, height, x + 1, y)
-                - pixel_at(&gray, width, height, x - 1, y);
-            let gy = pixel_at(&gray, width, height, x, y + 1)
-                - pixel_at(&gray, width, height, x, y - 1);
+            let gx = pixel_at(gray, width, height, x + 1, y)
+                - pixel_at(gray, width, height, x - 1, y);
+            let gy = pixel_at(gray, width, height, x, y + 1)
+                - pixel_at(gray, width, height, x, y - 1);
             let mag = sqrt(gx * gx + gy * gy);
             edge_map[y as usize * width + x as usize] = mag > 10.0;
         }

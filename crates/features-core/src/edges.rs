@@ -15,8 +15,27 @@ pub struct SobelResult {
 }
 
 /// Compute Sobel gx, gy, magnitudes, and orientations in a single pass.
-/// Uses a 1-pixel border-padded buffer for flat indexing — no per-pixel clamping.
+/// Uses a 1-pixel border-padded buffer for flat indexing.
+/// On WASM with simd128 enabled, processes 2 pixels per iteration via f64x2.
 pub fn sobel(gray: &[f64], width: usize, height: usize) -> SobelResult {
+    #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+    {
+        return sobel_simd(gray, width, height);
+    }
+    #[cfg(not(all(target_arch = "wasm32", target_feature = "simd128")))]
+    {
+        sobel_scalar(gray, width, height)
+    }
+}
+
+/// Force scalar Sobel path — for benchmarking against SIMD on WASM.
+pub fn sobel_scalar_force(gray: &[f64], width: usize, height: usize) -> SobelResult {
+    sobel_scalar(gray, width, height)
+}
+
+/// Scalar Sobel — used on native (py-features) and as WASM fallback.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+fn sobel_scalar(gray: &[f64], width: usize, height: usize) -> SobelResult {
     let padded = pad_gray(gray, width, height);
     let pw = width + 2;
     let n = width * height;
@@ -26,10 +45,118 @@ pub fn sobel(gray: &[f64], width: usize, height: usize) -> SobelResult {
     let mut orientations = Vec::with_capacity(n);
 
     for y in 0..height {
+        let row_above = y * pw;
         let row = (y + 1) * pw;
-        let row_above = row - pw;
-        let row_below = row + pw;
+        let row_below = (y + 2) * pw;
         for x in 0..width {
+            let c = x + 1;
+            let tl = padded[row_above + c - 1];
+            let tm = padded[row_above + c];
+            let tr = padded[row_above + c + 1];
+            let ml = padded[row + c - 1];
+            let mr = padded[row + c + 1];
+            let bl = padded[row_below + c - 1];
+            let bm = padded[row_below + c];
+            let br = padded[row_below + c + 1];
+
+            let gx_val = -tl + tr - 2.0 * ml + 2.0 * mr - bl + br;
+            let gy_val = -tl - 2.0 * tm - tr + bl + 2.0 * bm + br;
+
+            gx.push(gx_val);
+            gy.push(gy_val);
+            magnitudes.push(sqrt(gx_val * gx_val + gy_val * gy_val));
+            orientations.push(atan2(gy_val, gx_val));
+        }
+    }
+
+    SobelResult {
+        gx,
+        gy,
+        magnitudes,
+        orientations,
+        width,
+        height,
+    }
+}
+
+/// SIMD Sobel — processes 2 pixels per iteration with f64x2 (128-bit WASM SIMD).
+/// Reduces gradient computation to ~half the iterations of the scalar path.
+#[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+fn sobel_simd(gray: &[f64], width: usize, height: usize) -> SobelResult {
+    use core::arch::wasm32::*;
+
+    let padded = pad_gray(gray, width, height);
+    let pw = width + 2;
+    let n = width * height;
+    let mut gx = Vec::with_capacity(n);
+    let mut gy = Vec::with_capacity(n);
+    let mut magnitudes = Vec::with_capacity(n);
+    let mut orientations = Vec::with_capacity(n);
+
+    let neg_one = f64x2_splat(-1.0);
+    let neg_two = f64x2_splat(-2.0);
+    let two = f64x2_splat(2.0);
+
+    let w_even = width - (width % 2);
+
+    for y in 0..height {
+        let row_above = y * pw;
+        let row = (y + 1) * pw;
+        let row_below = (y + 2) * pw;
+
+        let mut x = 0;
+        while x < w_even {
+            let c = x + 1;
+
+            // gx needs tl and tr: positions [c-1, c] for tl, [c+1, c+2] for tr
+            let tl = f64x2(padded[row_above + c - 1], padded[row_above + c]);
+            let tr = f64x2(padded[row_above + c + 1], padded[row_above + c + 2]);
+            // gy also needs tm: positions [c, c+1]
+            let tm = f64x2(padded[row_above + c], padded[row_above + c + 1]);
+
+            let ml = f64x2(padded[row + c - 1], padded[row + c]);
+            let mr = f64x2(padded[row + c + 1], padded[row + c + 2]);
+
+            let bl = f64x2(padded[row_below + c - 1], padded[row_below + c]);
+            let bm = f64x2(padded[row_below + c], padded[row_below + c + 1]);
+            let br = f64x2(padded[row_below + c + 1], padded[row_below + c + 2]);
+
+            // gx = -tl + tr - 2*ml + 2*mr - bl + br
+            let mut gx_vec = f64x2_mul(neg_one, tl);
+            gx_vec = f64x2_add(gx_vec, tr);
+            gx_vec = f64x2_add(gx_vec, f64x2_mul(neg_two, ml));
+            gx_vec = f64x2_add(gx_vec, f64x2_mul(two, mr));
+            gx_vec = f64x2_add(gx_vec, f64x2_mul(neg_one, bl));
+            gx_vec = f64x2_add(gx_vec, br);
+
+            // gy = -tl - 2*tm - tr + bl + 2*bm + br
+            let mut gy_vec = f64x2_mul(neg_one, tl);
+            gy_vec = f64x2_add(gy_vec, f64x2_mul(neg_two, tm));
+            gy_vec = f64x2_add(gy_vec, f64x2_mul(neg_one, tr));
+            gy_vec = f64x2_add(gy_vec, bl);
+            gy_vec = f64x2_add(gy_vec, f64x2_mul(two, bm));
+            gy_vec = f64x2_add(gy_vec, br);
+
+            let gx0 = f64x2_extract_lane::<0>(gx_vec);
+            let gx1 = f64x2_extract_lane::<1>(gx_vec);
+            let gy0 = f64x2_extract_lane::<0>(gy_vec);
+            let gy1 = f64x2_extract_lane::<1>(gy_vec);
+
+            gx.push(gx0);
+            gx.push(gx1);
+            gy.push(gy0);
+            gy.push(gy1);
+            magnitudes.push(sqrt(gx0 * gx0 + gy0 * gy0));
+            magnitudes.push(sqrt(gx1 * gx1 + gy1 * gy1));
+            orientations.push(atan2(gy0, gx0));
+            orientations.push(atan2(gy1, gx1));
+
+            x += 2;
+        }
+
+        // Remainder: odd-width trailing pixel
+        if width % 2 != 0 {
+            let x = width - 1;
             let c = x + 1;
             let tl = padded[row_above + c - 1];
             let tm = padded[row_above + c];

@@ -249,6 +249,42 @@ pub fn classify_file(bytes: &[u8]) -> Result<JsValue, JsValue> {
     Ok(result.into())
 }
 
+/// Benchmark Sobel: time SIMD vs scalar path on a synthetic grayscale image.
+/// Returns a JS object `{simd_us, scalar_us, speedup, pixels, width, height}`.
+/// On native (not WASM), simd and scalar are identical.
+#[wasm_bindgen]
+pub fn bench_sobel(width: usize, height: usize, iterations: u32) -> Result<JsValue, JsValue> {
+    let n = width * height;
+    let gray: Vec<f64> = (0..n).map(|i| (i as f64 * 0.3).sin() * 128.0 + 128.0).collect();
+
+    // Warm up
+    features_core::edges::sobel(&gray, width, height);
+
+    let t0 = js_sys::Date::now();
+    for _ in 0..iterations {
+        features_core::edges::sobel(&gray, width, height);
+    }
+    let simd_us = (js_sys::Date::now() - t0) * 1000.0 / iterations as f64;
+
+    let t0 = js_sys::Date::now();
+    for _ in 0..iterations {
+        features_core::edges::sobel_scalar_force(&gray, width, height);
+    }
+    let scalar_us = (js_sys::Date::now() - t0) * 1000.0 / iterations as f64;
+
+    let speedup = if simd_us > 0.0 { scalar_us / simd_us } else { 1.0 };
+
+    let result = js_sys::Object::new();
+    js_sys::Reflect::set(&result, &JsValue::from_str("simd_us"), &JsValue::from_f64(simd_us))?;
+    js_sys::Reflect::set(&result, &JsValue::from_str("scalar_us"), &JsValue::from_f64(scalar_us))?;
+    js_sys::Reflect::set(&result, &JsValue::from_str("speedup"), &JsValue::from_f64(speedup))?;
+    js_sys::Reflect::set(&result, &JsValue::from_str("pixels"), &JsValue::from_f64(n as f64))?;
+    js_sys::Reflect::set(&result, &JsValue::from_str("width"), &JsValue::from_f64(width as f64))?;
+    js_sys::Reflect::set(&result, &JsValue::from_str("height"), &JsValue::from_f64(height as f64))?;
+
+    Ok(result.into())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

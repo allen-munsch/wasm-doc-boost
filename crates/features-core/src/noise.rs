@@ -1,35 +1,15 @@
 use alloc::vec;
 use alloc::vec::Vec;
 use libm::sqrt;
-
-/// Convert RGB pixels to grayscale f64 values.
-fn to_grayscale(pixels: &[u8], width: usize, height: usize) -> Vec<f64> {
-    let n = width * height;
-    let mut gray = Vec::with_capacity(n);
-    for i in 0..n {
-        let r = pixels[i * 3] as f64;
-        let g = pixels[i * 3 + 1] as f64;
-        let b = pixels[i * 3 + 2] as f64;
-        gray.push(0.299 * r + 0.587 * g + 0.114 * b);
-    }
-    gray
-}
-
-/// Get grayscale pixel at (x, y), clamping to border.
-fn pixel_at(gray: &[f64], width: usize, height: usize, x: isize, y: isize) -> f64 {
-    let x = x.clamp(0, width as isize - 1) as usize;
-    let y = y.clamp(0, height as isize - 1) as usize;
-    gray[y * width + x]
-}
+use crate::pixel_at;
 
 // ---------------------------------------------------------------------------
 // 2d-a: High-pass residual variance (original − median-filtered 5×5)
 // ---------------------------------------------------------------------------
 
 /// High-pass residual: subtract 5×5 median-filtered image, return variance.
-pub fn high_pass_residual_variance(pixels: &[u8], width: usize, height: usize) -> f64 {
-    let gray = to_grayscale(pixels, width, height);
-    let filtered = median_filter_5x5(&gray, width, height);
+pub fn high_pass_residual_variance(gray: &[f64], width: usize, height: usize) -> f64 {
+    let filtered = median_filter_5x5(gray, width, height);
     let n = gray.len() as f64;
 
     let mean_residual: f64 = gray
@@ -181,12 +161,11 @@ fn blockiness_v(gray: &[f64], width: usize, height: usize) -> f64 {
 }
 
 /// JPEG blockiness features: horizontal blockiness, vertical blockiness.
-pub fn jpeg_blockiness(pixels: &[u8], width: usize, height: usize) -> Vec<f64> {
-    let gray = to_grayscale(pixels, width, height);
+pub fn jpeg_blockiness(gray: &[f64], width: usize, height: usize) -> Vec<f64> {
     if width < 16 || height < 16 {
         return alloc::vec![0.0, 0.0];
     }
-    alloc::vec![blockiness_h(&gray, width, height), blockiness_v(&gray, width, height)]
+    alloc::vec![blockiness_h(gray, width, height), blockiness_v(gray, width, height)]
 }
 
 // ---------------------------------------------------------------------------
@@ -196,19 +175,18 @@ pub fn jpeg_blockiness(pixels: &[u8], width: usize, height: usize) -> Vec<f64> {
 /// Gradient SNR: ratio of mean Sobel magnitude to residual variance.
 /// Higher SNR → sharper image (documents, digital graphics).
 /// Lower SNR → noisy/natural images.
-pub fn gradient_snr(pixels: &[u8], width: usize, height: usize) -> f64 {
-    let gray = to_grayscale(pixels, width, height);
-    let residual_var = high_pass_residual_variance(pixels, width, height);
+pub fn gradient_snr(gray: &[f64], width: usize, height: usize) -> f64 {
+    let residual_var = high_pass_residual_variance(gray, width, height);
 
     // Compute mean Sobel magnitude manually to avoid dependency
     let mut sum_mag = 0.0;
     let mut count = 0u32;
     for y in 1..height as isize - 1 {
         for x in 1..width as isize - 1 {
-            let gx = pixel_at(&gray, width, height, x + 1, y)
-                - pixel_at(&gray, width, height, x - 1, y);
-            let gy = pixel_at(&gray, width, height, x, y + 1)
-                - pixel_at(&gray, width, height, x, y - 1);
+            let gx = pixel_at(gray, width, height, x + 1, y)
+                - pixel_at(gray, width, height, x - 1, y);
+            let gy = pixel_at(gray, width, height, x, y + 1)
+                - pixel_at(gray, width, height, x, y - 1);
             sum_mag += sqrt(gx * gx + gy * gy);
             count += 1;
         }
