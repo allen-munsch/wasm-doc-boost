@@ -209,15 +209,9 @@ mod tests {
     use super::*;
     use alloc::vec;
 
-    fn solid_128(w: usize, h: usize) -> Vec<u8> {
+    fn solid_128(w: usize, h: usize) -> Vec<f64> {
         let n = w * h;
-        let mut p = Vec::with_capacity(n * 3);
-        for _ in 0..n {
-            p.push(128);
-            p.push(128);
-            p.push(128);
-        }
-        p
+        vec![128.0; n]
     }
 
     #[test]

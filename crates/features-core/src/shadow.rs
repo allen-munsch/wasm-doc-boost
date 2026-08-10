@@ -149,15 +149,8 @@ mod tests {
     use super::*;
     use alloc::vec;
 
-    fn solid_128(w: usize, h: usize) -> Vec<u8> {
-        let n = w * h;
-        let mut p = Vec::with_capacity(n * 3);
-        for _ in 0..n {
-            p.push(128);
-            p.push(128);
-            p.push(128);
-        }
-        p
+    fn solid_128(w: usize, h: usize) -> Vec<f64> {
+        vec![128.0; w * h]
     }
 
     #[test]
@@ -181,13 +174,9 @@ mod tests {
         for y in 0..h {
             for x in 0..w {
                 if x >= 20 && x < 60 && y >= 20 && y < 60 {
-                    pixels.push(0);
-                    pixels.push(0);
-                    pixels.push(0);
+                    pixels.push(0.0);
                 } else {
-                    pixels.push(255);
-                    pixels.push(255);
-                    pixels.push(255);
+                    pixels.push(255.0);
                 }
             }
         }

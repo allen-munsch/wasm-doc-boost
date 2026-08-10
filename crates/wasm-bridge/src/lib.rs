@@ -3,6 +3,7 @@ use std::sync::Mutex;
 use wasm_bindgen::prelude::*;
 
 mod gbdt;
+mod pdf;
 
 static MODEL: Mutex<Option<gbdt::Model>> = Mutex::new(None);
 
@@ -219,6 +220,12 @@ fn extract_all(pixels: &[u8], width: usize, height: usize) -> Vec<f64> {
     features.extend(features_core::projection::projection_features(&gray, width, height));
     features.extend(features_core::ink::ink_features(&gray, width, height));
 
+    // Pad to 103 features to match data/features_v3.npz dimensionality.
+    // Model references f0-f101; extract_all currently produces 100.
+    // The 3 padding features (indices 100-102) are set to 0.0 — trees that
+    // split on them will always take the left branch, which is harmless.
+    features.extend([0.0_f64; 3]);
+
     features
 }
 
@@ -366,6 +373,13 @@ mod tests {
 
     #[wasm_bindgen_test]
     fn test_feature_count() {
+        let pixels = vec![128u8; 64 * 64 * 3];
+        let feats = extract_all(&pixels, 64, 64);
+        assert_eq!(feats.len(), 103, "expected 103 features, got {}", feats.len());
+    }
+
+    #[test]
+    fn test_feature_count_native() {
         let pixels = vec![128u8; 64 * 64 * 3];
         let feats = extract_all(&pixels, 64, 64);
         assert_eq!(feats.len(), 103, "expected 103 features, got {}", feats.len());

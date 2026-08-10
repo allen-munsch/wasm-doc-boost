@@ -6,3 +6,4 @@ __pycache__/
 node_modules/
 *.onnx
 LOOP_PLAN.md
+pdf-inspector/

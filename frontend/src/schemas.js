@@ -162,6 +162,31 @@ export const ClassifySchema = z.object({
     is_shadow: z.number().min(0).max(1),
 });
 
+// Layer 0 — WASM PDF classification output (classifyPdf)
+export const PdfClassifySchema = z.object({
+    pdfType: z.enum(['TextBased', 'Scanned', 'ImageBased', 'Mixed']),
+    pageCount: z.number().int().positive(),
+    pagesNeedingOcr: z.array(z.number().int().nonnegative()),
+    confidence: z.number().min(0).max(1),
+});
+
+// Layer 0 — WASM PDF text extraction (extractTextWithPositions)
+export const PdfTextItemSchema = z.object({
+    text: z.string(),
+    x: z.number(),
+    y: z.number(),
+    width: z.number(),
+    height: z.number(),
+    font: z.string(),
+    fontSize: z.number(),
+    page: z.number().int().nonnegative(),
+    isBold: z.boolean(),
+    isItalic: z.boolean(),
+    isUnderline: z.boolean(),
+    isStrikeout: z.boolean(),
+    itemType: z.string(),
+});
+
 // ═══════════════════════════════════════════════════════════════════════
 // Layer 0 — PII hit (from wasm-bridge scan_pii)
 // ═══════════════════════════════════════════════════════════════════════
@@ -197,7 +222,7 @@ export const RegionSchema = z.object({
     bbox: BboxSchema,
     confidence: z.number().min(0).max(100),
 
-    source: z.enum(['tesseract', 'glm-ocr', 'merged']),
+        source: z.enum(['tesseract', 'glm-ocr', 'merged', 'pdf']),
 
     sourceDetail: z.object({
         // Tesseract-specific (null for GLM)
@@ -205,7 +230,7 @@ export const RegionSchema = z.object({
         level: z.enum(['word']).nullable(),
         parentId: z.string().nullable(),
 
-        // GLM-specific (null for Tesseract)
+        // GLM / PDF (null for Tesseract)
         regionIndex: z.number().int().nullable(),
     }),
 
@@ -263,10 +288,18 @@ export const ImageInfoSchema = z.object({
     mime: z.string(),
 });
 
+export const PdfInfoSchema = z.object({
+    pdfType: z.enum(['TextBased', 'Scanned', 'ImageBased', 'Mixed']),
+    pageCount: z.number().int().positive(),
+    pagesNeedingOcr: z.array(z.number().int().nonnegative()),
+    confidence: z.number().min(0).max(1),
+});
+
 export const EnrichedDocumentDataSchema = z.object({
     id: z.string(),
     timestamp: z.string(),
-    image: ImageInfoSchema,
+    image: ImageInfoSchema.nullable(),
+    pdf: PdfInfoSchema.nullable(),
     classification: ClassifySchema.nullable(),
     regions: z.array(RegionSchema),
     pii: z.array(PiiHitSchema),

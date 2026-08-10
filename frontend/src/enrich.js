@@ -27,7 +27,8 @@ export function createEnrichedDocument(params) {
     var data = EnrichedDocumentDataSchema.parse({
         id: crypto.randomUUID ? crypto.randomUUID() : fallbackUUID(),
         timestamp: new Date().toISOString(),
-        image: params.image,
+        image: params.image || null,
+        pdf: params.pdf || null,
         classification: params.classification || null,
         regions: params.regions || [],
         pii: params.pii || [],
@@ -173,7 +174,8 @@ export function fromJSON(json) {
  */
 export function buildEnrichedDocument(params) {
     return createEnrichedDocument({
-        image: params.image,
+        image: params.image || null,
+        pdf: params.pdf || null,
         classification: params.classification,
         regions: params.regions || [],
         pii: params.pii || [],

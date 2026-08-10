@@ -8,8 +8,8 @@
 //
 // Init is once. analyze is per-document.
 
-import init, { load_model, classify_file, scan_pii } from '../wasm_bridge.js';
-import { ClassifySchema, PiiHitSchema } from './schemas.js';
+import init, { load_model, classify_file, classifyPdf, extractTextWithPositions, scan_pii } from '../wasm_bridge.js';
+import { ClassifySchema, PdfClassifySchema, PdfTextItemSchema, PiiHitSchema } from './schemas.js';
 import { normalizeTesseract, normalizeGlmOcr } from './normalize.js';
 import { mergeRegions } from './merge.js';
 import { buildEnrichedDocument } from './enrich.js';
@@ -96,6 +96,7 @@ export async function createDocBoost(config, onProgress) {
     return {
         config: config,
         analyze: analyze,
+        analyzePdf: analyzePdf,
     };
 
     // ═══════════════════════════════════════════════════════════════
@@ -189,6 +190,89 @@ export async function createDocBoost(config, onProgress) {
             glmOcr: glmResult,
             analysisMs: Math.round(performance.now() - t0),
             mergeStats: merged.stats,
+        });
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // analyzePdf — closure captures nothing from Tesseract/GLM
+    // ═══════════════════════════════════════════════════════════════
+
+    /**
+     * Analyze a PDF file — classify type, extract text, scan PII.
+     *
+     * @param {File|Blob} pdfFile
+     * @returns {Promise<object>} EnrichedDocument data object
+     */
+    async function analyzePdf(pdfFile) {
+        var t0 = performance.now();
+        var bytes = new Uint8Array(await pdfFile.arrayBuffer());
+
+        // ── Step 1: Classify PDF type ──
+        var pdfClassify = null;
+        try {
+            pdfClassify = PdfClassifySchema.parse(classifyPdf(bytes));
+            report('classify', 'ok', 'PDF: ' + pdfClassify.pdfType + ', ' + pdfClassify.pageCount + ' pages');
+        } catch (e) {
+            report('classify', 'err', e.message || String(e));
+            throw e;
+        }
+
+        // ── Step 2: Extract text with positions ──
+        var textItems = [];
+        try {
+            var rawItems = extractTextWithPositions(bytes);
+            textItems = PdfTextItemSchema.array().parse(rawItems);
+            report('ocr', 'ok', 'Extracted ' + textItems.length + ' text items');
+        } catch (e) {
+            report('ocr', 'err', e.message || String(e));
+        }
+
+        // ── Step 3: Build regions from PDF text items ──
+        var pdfRegions = textItems.map(function (item, i) {
+            return {
+                id: 'pdf-' + item.page + '-' + i,
+                text: item.text,
+                bbox: { x0: item.x, y0: item.y, x1: item.x + item.width, y1: item.y + item.height },
+                confidence: 100,
+                source: 'pdf',
+                sourceDetail: {
+                    blockType: item.itemType,
+                    level: null,
+                    parentId: null,
+                    regionIndex: i,
+                },
+                mergeDecision: null,
+            };
+        });
+
+        // ── Step 4: PII scan on combined text ──
+        var combinedText = pdfRegions.map(function (r) { return r.text; }).join('\n');
+        var pii = [];
+        try {
+            var rawPii = scan_pii(combinedText);
+            if (rawPii && rawPii.length) {
+                pii = PiiHitSchema.array().parse(rawPii);
+            }
+        } catch (e) {
+            report('pii', 'err', e.message || String(e));
+        }
+
+        // ── Step 5: Build enriched document ──
+        return buildEnrichedDocument({
+            image: null,
+            pdf: pdfClassify,
+            classification: null,
+            regions: pdfRegions,
+            pii: pii,
+            tesseract: null,
+            glmOcr: null,
+            analysisMs: Math.round(performance.now() - t0),
+            mergeStats: {
+                tesseractRegions: 0,
+                glmRegions: 0,
+                mergedPairs: 0,
+                finalRegions: pdfRegions.length,
+            },
         });
     }
 
