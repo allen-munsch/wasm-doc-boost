@@ -57,6 +57,9 @@ fn extract_all(pixels: Vec<u8>, width: usize, height: usize) -> PyResult<Vec<f64
     features.extend(features_core::projection::projection_features(&gray, width, height));
     features.extend(features_core::ink::ink_features(&gray, width, height));
 
+    // Pad to 103 features to match data/features_v3.npz dimensionality.
+    features.extend([0.0_f64; 3]);
+
     Ok(features)
 }
 

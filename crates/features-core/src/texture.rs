@@ -443,14 +443,8 @@ mod tests {
     use super::*;
     use alloc::vec;
 
-    fn solid_128() -> Vec<u8> {
-        let mut p = Vec::with_capacity(8 * 8 * 3);
-        for _ in 0..64 {
-            p.push(128);
-            p.push(128);
-            p.push(128);
-        }
-        p
+    fn solid_128() -> Vec<f64> {
+        vec![128.0; 64]
     }
 
     #[test]
@@ -491,13 +485,7 @@ mod tests {
     #[test]
     fn fractal_dimension_noise() {
         // Noisy image should have higher FD
-        let mut noisy = Vec::with_capacity(16 * 16 * 3);
-        for i in 0..256 {
-            let v = ((i * 37 + 13) % 256) as u8;
-            noisy.push(v);
-            noisy.push(v);
-            noisy.push(v);
-        }
+        let noisy: Vec<f64> = (0..256).map(|i| ((i * 37 + 13) % 256) as f64).collect();
         let fd = fractal_dimension(&noisy, 16, 16);
         assert!(fd > 0.0);
     }

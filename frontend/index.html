@@ -196,7 +196,7 @@
   <!-- Drop zone -->
   <div id="drop-zone">
     &#x1F4C4; Drop image here or click to browse
-    <input type="file" id="file-input" accept="image/*">
+    <input type="file" id="file-input" accept="image/*,application/pdf">
   </div>
 
   <!-- Stages -->
@@ -352,21 +352,30 @@ function setStage(el, text, cls) {
 async function handleFile(file) {
   if (!db) return;
 
-  // Show image
-  const blob = new Blob([await file.arrayBuffer()], { type: file.type });
-  mainImage.src = URL.createObjectURL(blob);
-  mainImage.onload = () => {
-    viewer.style.display = 'block';
-    placeholder.style.display = 'none';
-    setupCanvas();
-  };
+  const isPdf = file.type === 'application/pdf';
+
+  if (!isPdf) {
+    // Show image
+    const blob = new Blob([await file.arrayBuffer()], { type: file.type });
+    mainImage.src = URL.createObjectURL(blob);
+    mainImage.onload = () => {
+      viewer.style.display = 'block';
+      placeholder.style.display = 'none';
+      setupCanvas();
+    };
+  } else {
+    // Hide image viewer for PDF
+    viewer.style.display = 'none';
+    placeholder.style.display = 'block';
+    placeholder.innerHTML = '&#x1F4C4; Analyzing PDF…';
+  }
 
   // Analyze
   scoresCard.style.display = 'block';
   scoresCont.innerHTML = '<span style="color:var(--muted);font-size:0.73rem">Analyzing…</span>';
 
   try {
-    currentDoc = await db.analyze(file);
+    currentDoc = isPdf ? await db.analyzePdf(file) : await db.analyze(file);
   } catch (e) {
     scoresCont.innerHTML = '<span style="color:var(--accent)">Analysis failed: ' + (e.message || String(e)) + '</span>';
     console.error('Analyze error:', e);
@@ -376,12 +385,24 @@ async function handleFile(file) {
   renderScores(currentDoc);
   renderOcr(currentDoc);
   renderPii(currentDoc);
-  clearRedactionCanvas();
+  if (!isPdf) clearRedactionCanvas();
 }
 
 // ── Render scores ──
 function renderScores(doc) {
   const cls = classification(doc);
+
+  // PDF path: show PDF type info
+  if (doc.pdf) {
+    const p = doc.pdf;
+    scoresCont.innerHTML =
+      '<div class="score-row"><span class="score-label">PDF Type</span><span class="score-val">' + p.pdfType + '</span></div>' +
+      '<div class="score-row"><span class="score-label">Pages</span><span class="score-val">' + p.pageCount + '</span></div>' +
+      '<div class="score-row"><span class="score-label">Needs OCR</span><span class="score-val">' + (p.pagesNeedingOcr.length || '0') + ' pages</span></div>' +
+      '<div class="score-row"><span class="score-label">Confidence</span><span class="score-val">' + Math.round(p.confidence * 100) + '%</span></div>';
+    return;
+  }
+
   if (!cls) {
     scoresCont.innerHTML = '<span style="color:var(--muted)">No classification available</span>';
     return;
@@ -584,7 +605,7 @@ dropZone.ondrop = (e) => {
   e.preventDefault();
   dropZone.classList.remove('drag-over');
   const file = e.dataTransfer.files[0];
-  if (file && file.type.startsWith('image/')) handleFile(file);
+  if (file && (file.type.startsWith('image/') || file.type === 'application/pdf')) handleFile(file);
 };
 
 redactToggle.onclick = () => redactCollapse.classList.toggle('open');
