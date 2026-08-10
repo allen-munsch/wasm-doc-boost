@@ -392,13 +392,17 @@ async function handleFile(file) {
 function renderScores(doc) {
   const cls = classification(doc);
 
-  // PDF path: show PDF type info
+  // PDF path: show PDF type info with native vs OCR page breakdown
   if (doc.pdf) {
     const p = doc.pdf;
+    var needingOcr = p.pagesNeedingOcr || [];
+    var ocrCount = needingOcr.length;
+    var nativeCount = p.pageCount - ocrCount;
     scoresCont.innerHTML =
       '<div class="score-row"><span class="score-label">PDF Type</span><span class="score-val">' + p.pdfType + '</span></div>' +
       '<div class="score-row"><span class="score-label">Pages</span><span class="score-val">' + p.pageCount + '</span></div>' +
-      '<div class="score-row"><span class="score-label">Needs OCR</span><span class="score-val">' + (p.pagesNeedingOcr.length || '0') + ' pages</span></div>' +
+      '<div class="score-row"><span class="score-label">Text pages</span><span class="score-val">' + nativeCount + '</span></div>' +
+      '<div class="score-row"><span class="score-label">OCR pages</span><span class="score-val">' + ocrCount + '</span></div>' +
       '<div class="score-row"><span class="score-label">Confidence</span><span class="score-val">' + Math.round(p.confidence * 100) + '%</span></div>';
     return;
   }

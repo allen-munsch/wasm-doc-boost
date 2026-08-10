@@ -222,7 +222,7 @@ export const RegionSchema = z.object({
     bbox: BboxSchema,
     confidence: z.number().min(0).max(100),
 
-        source: z.enum(['tesseract', 'glm-ocr', 'merged', 'pdf']),
+        source: z.enum(['tesseract', 'glm-ocr', 'merged', 'pdf', 'pdf-ocr']),
 
     sourceDetail: z.object({
         // Tesseract-specific (null for GLM)

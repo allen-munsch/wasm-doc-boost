@@ -135,37 +135,11 @@ export async function createDocBoost(config, onProgress) {
             report('classify', 'err', e.message || String(e));
         }
 
-        // ── Step 2: OCR in parallel ──
-        var tessResult = null;
-        var glmResult = null;
-
-        var parallel = [];
-        parallel.push(runTess(imgEl));
-        if (glmAvailable) {
-            parallel.push(runGlm(bytes, imgEl));
-        }
-
-        var settled = await Promise.allSettled(parallel);
-        var idx = 0;
-
-        if (tessWorker) {
-            tessResult = settled[idx].status === 'fulfilled' ? settled[idx].value : null;
-            idx++;
-        }
-
-        if (glmAvailable) {
-            glmResult = settled[idx].status === 'fulfilled' ? settled[idx].value : null;
-        }
-
-        // ── Step 3: Normalize → Region[] ──
-        var tessRegions = tessResult ? normalizeTesseract(tessResult) : [];
-        var glmRegions = glmResult ? normalizeGlmOcr(glmResult) : [];
-
-        // ── Step 4: Merge ──
-        var merged = mergeRegions(tessRegions, glmRegions);
+        // ── Step 2: OCR in parallel, normalize, merge ──
+        var { regions: mergedRegions, tessResult, glmResult, mergeStats } = await runOcrPipeline(imgEl, bytes);
 
         // ── Step 5: PII scan on combined text ──
-        var combinedText = merged.regions.map(function (r) { return r.text; }).join('\n');
+        var combinedText = mergedRegions.map(function (r) { return r.text; }).join('\n');
         var pii = [];
         try {
             var rawPii = scan_pii(combinedText);
@@ -184,21 +158,21 @@ export async function createDocBoost(config, onProgress) {
                 mime: imageOrFile.type || (imageOrFile instanceof HTMLImageElement ? 'image/png' : 'application/octet-stream'),
             },
             classification: classification,
-            regions: merged.regions,
+            regions: mergedRegions,
             pii: pii,
             tesseract: tessResult,
             glmOcr: glmResult,
             analysisMs: Math.round(performance.now() - t0),
-            mergeStats: merged.stats,
+            mergeStats: mergeStats,
         });
     }
 
     // ═══════════════════════════════════════════════════════════════
-    // analyzePdf — closure captures nothing from Tesseract/GLM
+    // analyzePdf — mixed PDF: native text for text pages, OCR for scans
     // ═══════════════════════════════════════════════════════════════
 
     /**
-     * Analyze a PDF file — classify type, extract text, scan PII.
+     * Analyze a PDF file — classify, split text/scanned pages, OCR scans, merge.
      *
      * @param {File|Blob} pdfFile
      * @returns {Promise<object>} EnrichedDocument data object
@@ -217,36 +191,128 @@ export async function createDocBoost(config, onProgress) {
             throw e;
         }
 
-        // ── Step 2: Extract text with positions ──
+        // ── Step 2: Extract all native text items ──
         var textItems = [];
         try {
             var rawItems = extractTextWithPositions(bytes);
             textItems = PdfTextItemSchema.array().parse(rawItems);
-            report('ocr', 'ok', 'Extracted ' + textItems.length + ' text items');
+            report('ocr', 'ok', 'Extracted ' + textItems.length + ' native text items');
         } catch (e) {
             report('ocr', 'err', e.message || String(e));
         }
 
-        // ── Step 3: Build regions from PDF text items ──
-        var pdfRegions = textItems.map(function (item, i) {
-            return {
-                id: 'pdf-' + item.page + '-' + i,
-                text: item.text,
-                bbox: { x0: item.x, y0: item.y, x1: item.x + item.width, y1: item.y + item.height },
-                confidence: 100,
-                source: 'pdf',
-                sourceDetail: {
-                    blockType: item.itemType,
-                    level: null,
-                    parentId: null,
-                    regionIndex: i,
-                },
-                mergeDecision: null,
-            };
+        var needingOcr = new Set(pdfClassify.pagesNeedingOcr || []);
+        var allRegions = [];
+        var tessResult = null;
+        var glmResult = null;
+        var mergeStats = { tesseractRegions: 0, glmRegions: 0, mergedPairs: 0, finalRegions: 0 };
+
+        // ── Step 3: Native regions from text-based pages (not in pagesNeedingOcr) ──
+        var nativeCount = 0;
+        var nativeItemsByPage = {};
+        for (var i = 0; i < textItems.length; i++) {
+            var item = textItems[i];
+            if (needingOcr.has(item.page)) continue;
+            if (!nativeItemsByPage[item.page]) nativeItemsByPage[item.page] = [];
+            nativeItemsByPage[item.page].push(item);
+            nativeCount++;
+        }
+        report('ocr', 'ok', 'Native text from ' + Object.keys(nativeItemsByPage).length + ' text-based page(s), ' + nativeCount + ' items');
+
+        for (var pg in nativeItemsByPage) {
+            var pgItems = nativeItemsByPage[pg];
+            for (var j = 0; j < pgItems.length; j++) {
+                var ni = pgItems[j];
+                allRegions.push({
+                    id: 'pdf-' + ni.page + '-' + j,
+                    text: ni.text,
+                    bbox: { x0: ni.x, y0: ni.y, x1: ni.x + ni.width, y1: ni.y + ni.height },
+                    confidence: 100,
+                    source: 'pdf',
+                    sourceDetail: {
+                        blockType: ni.itemType,
+                        level: null,
+                        parentId: null,
+                        regionIndex: j,
+                    },
+                    mergeDecision: null,
+                });
+            }
+        }
+
+        // ── Step 4: OCR-needed pages → render + run image pipeline ──
+        var ocrPages = Array.from(needingOcr).sort(function (a, b) { return a - b; });
+        var ocrRegionCount = 0;
+
+        for (var k = 0; k < ocrPages.length; k++) {
+            var pageIdx = ocrPages[k]; // 0-indexed from WASM
+            var pdfPageNum = pageIdx + 1; // 1-indexed for pdf.js
+
+            report('ocr', 'running', 'Rendering page ' + pdfPageNum + ' for OCR...');
+
+            var rendered;
+            try {
+                rendered = await renderPdfPage(bytes, pdfPageNum, 2.0);
+            } catch (e) {
+                report('ocr', 'err', 'Failed to render page ' + pdfPageNum + ': ' + (e.message || String(e)));
+                continue;
+            }
+
+            var pageBytes;
+            try {
+                pageBytes = await canvasToBytes(rendered.canvas);
+            } catch (e) {
+                report('ocr', 'err', 'Failed to convert page ' + pdfPageNum + ' canvas: ' + (e.message || String(e)));
+                continue;
+            }
+
+            var ocr = await runOcrPipeline(rendered.canvas, pageBytes);
+            if (!tessResult) tessResult = ocr.tessResult;
+            if (!glmResult) glmResult = ocr.glmResult;
+
+            // Convert OCR bboxes from canvas pixel coords (top-left) to PDF user space (bottom-left)
+            // PDF user space origin: bottom-left, Y increases upward
+            // Canvas origin: top-left, Y increases downward
+            // pdf.js viewport maps PDF → canvas by flipping Y internally
+            var scale = 2.0;
+            var pdfH = rendered.originalHeight;
+
+            for (var m = 0; m < ocr.regions.length; m++) {
+                var r = ocr.regions[m];
+                var canvasX0 = r.bbox.x0;
+                var canvasY0 = r.bbox.y0; // top of bbox in canvas
+                var canvasX1 = r.bbox.x1;
+                var canvasY1 = r.bbox.y1; // bottom of bbox in canvas
+
+                allRegions.push({
+                    id: 'pdf-ocr-' + pageIdx + '-' + (ocrRegionCount++),
+                    text: r.text,
+                    bbox: {
+                        x0: canvasX0 / scale,
+                        y0: pdfH - canvasY1 / scale,
+                        x1: canvasX1 / scale,
+                        y1: pdfH - canvasY0 / scale,
+                    },
+                    confidence: r.confidence,
+                    source: 'pdf-ocr',
+                    sourceDetail: r.sourceDetail || {},
+                    mergeDecision: null,
+                });
+            }
+
+            report('ocr', 'ok', 'Page ' + pdfPageNum + ': ' + ocr.regions.length + ' OCR regions');
+        }
+
+        // ── Step 5: Sort all regions by page ──
+        allRegions.sort(function (a, b) {
+            var pa = parseInt(a.id.replace('pdf-ocr-', '').replace('pdf-', '').split('-')[0]);
+            var pb = parseInt(b.id.replace('pdf-ocr-', '').replace('pdf-', '').split('-')[0]);
+            if (pa !== pb) return pa - pb;
+            return a.bbox.y1 - b.bbox.y1;
         });
 
-        // ── Step 4: PII scan on combined text ──
-        var combinedText = pdfRegions.map(function (r) { return r.text; }).join('\n');
+        // ── Step 6: PII scan on combined text ──
+        var combinedText = allRegions.map(function (r) { return r.text; }).join('\n');
         var pii = [];
         try {
             var rawPii = scan_pii(combinedText);
@@ -257,22 +323,17 @@ export async function createDocBoost(config, onProgress) {
             report('pii', 'err', e.message || String(e));
         }
 
-        // ── Step 5: Build enriched document ──
+        // ── Step 7: Build enriched document ──
         return buildEnrichedDocument({
             image: null,
             pdf: pdfClassify,
             classification: null,
-            regions: pdfRegions,
+            regions: allRegions,
             pii: pii,
-            tesseract: null,
-            glmOcr: null,
+            tesseract: tessResult,
+            glmOcr: glmResult,
             analysisMs: Math.round(performance.now() - t0),
-            mergeStats: {
-                tesseractRegions: 0,
-                glmRegions: 0,
-                mergedPairs: 0,
-                finalRegions: pdfRegions.length,
-            },
+            mergeStats: mergeStats,
         });
     }
 
@@ -304,6 +365,49 @@ export async function createDocBoost(config, onProgress) {
         });
         if (!resp.ok) throw new Error('GLM-OCR HTTP ' + resp.status + ': ' + await resp.text());
         return resp.json();
+    }
+
+    // ── Shared OCR pipeline (used by analyze + analyzePdf) ─────────
+
+    /**
+     * Run Tesseract + GLM-OCR in parallel, normalize, merge.
+     * @param {HTMLImageElement|HTMLCanvasElement} imageSource
+     * @param {Uint8Array} [optBytes] — raw bytes (required for GLM path)
+     * @returns {Promise<{regions:object[], tessResult:object|null, glmResult:object|null, mergeStats:object}>}
+     */
+    async function runOcrPipeline(imageSource, optBytes) {
+        var tessResult = null;
+        var glmResult = null;
+
+        var parallel = [];
+        parallel.push(runTess(imageSource));
+        if (glmAvailable && optBytes) {
+            parallel.push(runGlm(optBytes, imageSource));
+        }
+
+        var settled = await Promise.allSettled(parallel);
+        var idx = 0;
+
+        if (tessWorker) {
+            tessResult = settled[idx].status === 'fulfilled' ? settled[idx].value : null;
+            idx++;
+        }
+
+        if (glmAvailable && optBytes) {
+            glmResult = settled[idx].status === 'fulfilled' ? settled[idx].value : null;
+        }
+
+        var tessRegions = tessResult ? normalizeTesseract(tessResult) : [];
+        var glmRegions = glmResult ? normalizeGlmOcr(glmResult) : [];
+
+        var merged = mergeRegions(tessRegions, glmRegions);
+
+        return {
+            regions: merged.regions,
+            tessResult: tessResult,
+            glmResult: glmResult,
+            mergeStats: merged.stats,
+        };
     }
 }
 
@@ -347,4 +451,42 @@ function imageElToBase64(img) {
     var ctx = canvas.getContext('2d');
     ctx.drawImage(img, 0, 0);
     return canvas.toDataURL('image/jpeg', 0.85).split(',')[1];
+}
+
+// ── PDF page renderer (pdf.js, lazy-imported) ─────────────────────────
+
+/**
+ * Render a single PDF page to a canvas via pdf.js.
+ * @param {Uint8Array} pdfBytes
+ * @param {number} pageNum — 1-indexed page number
+ * @param {number} [scale=2.0] — render scale (higher = better OCR quality)
+ * @returns {Promise<{canvas:HTMLCanvasElement, width:number, height:number, originalWidth:number, originalHeight:number}>}
+ */
+async function renderPdfPage(pdfBytes, pageNum, scale) {
+    scale = scale || 2.0;
+    var { getDocument } = await import('pdfjs-dist/build/pdf.mjs');
+    var pdf = await getDocument({ data: pdfBytes, disableWorker: true }).promise;
+    var page = await pdf.getPage(pageNum);
+    var viewport = page.getViewport({ scale: scale });
+    var origView = page.getViewport({ scale: 1.0 });
+    var canvas = document.createElement('canvas');
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+    var ctx = canvas.getContext('2d');
+    await page.render({ canvasContext: ctx, viewport: viewport }).promise;
+    return {
+        canvas: canvas,
+        width: viewport.width,
+        height: viewport.height,
+        originalWidth: origView.width,
+        originalHeight: origView.height,
+    };
+}
+
+/** Convert a canvas to Uint8Array (PNG). */
+async function canvasToBytes(canvas) {
+    var blob = await new Promise(function (resolve) {
+        return canvas.toBlob(resolve, 'image/png');
+    });
+    return new Uint8Array(await blob.arrayBuffer());
 }
