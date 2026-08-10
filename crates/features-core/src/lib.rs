@@ -35,3 +35,57 @@ pub mod noise;
 pub mod projection;
 pub mod shadow;
 pub mod texture;
+
+/// Extract all 103 pixel heuristics from raw RGB bytes.
+///
+/// Returns a Vec of 103 f64 features (100 real + 3 zero-padded to match the
+/// dimensionality of `data/features_v3.npz`).
+///
+/// This is the single canonical feature vector — both `py-features` (training
+/// export) and `wasm-bridge` (inference) delegate to this function.
+pub fn extract_all(pixels: &[u8], width: usize, height: usize) -> Vec<f64> {
+    let gray = crate::to_grayscale(pixels, width, height);
+    let mut features = Vec::new();
+
+    features.extend(crate::color::per_channel_stats(pixels, width, height));
+    features.extend(crate::color::grayscale_stats(pixels, width, height));
+    features.push(crate::color::colorfulness(pixels, width, height));
+    features.extend(crate::color::saturation_stats(pixels, width, height));
+
+    let sobel = crate::edges::sobel(&gray, width, height);
+    features.push(crate::edges::laplacian_variance(&gray, width, height));
+    features.extend(crate::edges::sobel_stats(&sobel));
+    features.push(crate::edges::edge_density(&sobel));
+    features.extend(crate::edges::edge_direction_histogram(&sobel));
+    features.push(crate::edges::hv_edge_ratio(&sobel));
+    features.push(crate::edges::canny_edge_density(&sobel));
+    features.extend(crate::edges::structure_tensor_features(&sobel));
+    features.extend(crate::edges::sobel_circular_stats(&sobel));
+
+    features.push(crate::texture::dct_low_freq_ratio(&gray, width, height));
+    features.extend(crate::texture::lbp_histogram(&gray, width, height));
+    features.extend(crate::texture::glcm_features(&gray, width, height));
+    features.push(crate::texture::fractal_dimension(&gray, width, height));
+
+    features.push(crate::noise::high_pass_residual_variance(&gray, width, height));
+    features.extend(crate::noise::jpeg_blockiness(&gray, width, height));
+    features.push(crate::noise::gradient_snr(&gray, width, height));
+
+    features.extend(crate::shadow::shadow_features(&gray, width, height));
+
+    features.extend(crate::crumple::lbp_variance(&gray, width, height));
+    features.push(crate::crumple::edge_density_std(&gray, width, height));
+    features.push(crate::crumple::texture_anisotropy(&gray, width, height));
+    features.push(crate::crumple::peak_local_entropy(&gray, width, height));
+
+    features.extend(crate::document::document_features(pixels, width, height));
+    features.extend(crate::projection::projection_features(&gray, width, height));
+    features.extend(crate::ink::ink_features(&gray, width, height));
+
+    // Pad to 103 features to match data/features_v3.npz dimensionality.
+    // The 3 padding features (indices 100-102) are set to 0.0 — trees that
+    // split on them will always take the left branch, which is harmless.
+    features.extend([0.0_f64; 3]);
+
+    features
+}
