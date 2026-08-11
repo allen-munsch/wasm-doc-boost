@@ -1,16 +1,61 @@
+//! # py_features — Rust-powered feature extraction + PDF inspection for Python
+//!
+//! **Install:** `cd crates/py-features && pip install maturin && maturin develop --release`
+//!
+//! **Requires:** Rust toolchain, Python >= 3.8.
+//!
+//! ## Python API
+//!
+//! ```python
+//! import py_features
+//!
+//! # ── Image features ──
+//! from PIL import Image
+//! import numpy as np
+//!
+//! img = Image.open("document.jpg").convert("RGB")
+//! pixels = np.array(img, dtype=np.uint8).tobytes()
+//! feats = py_features.extract_all(pixels, img.width, img.height)
+//! # -> list[float]  (length 103: 100 real + 3 zero-padded)
+//!
+//! # ── PDF classification ──
+//! pdf_bytes = open("document.pdf", "rb").read()
+//! result = py_features.classify_pdf(pdf_bytes)
+//! # -> {'pdf_type': 'TextBased', 'page_count': 7,
+//! #     'pages_needing_ocr': [], 'confidence': 1.0}
+//!
+//! # ── PDF text extraction ──
+//! items = py_features.extract_text_with_positions(pdf_bytes)
+//! # -> [{'text': 'Hello', 'x': 72.0, 'y': 720.0, 'width': 45.0,
+//! #      'height': 12.0, 'font': 'F1', 'font_size': 10.0, 'page': 1,
+//! #      'is_bold': False, 'is_italic': False, 'is_underline': False,
+//! #      'is_strikeout': False, 'item_type': 'text'}, ...]
+//! ```
+//!
+//! ---
+
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use pdf_inspector_core::{PdfType, types::ItemType};
 
-/// Extract all 103 pixel heuristics from raw RGB bytes (delegates to features-core).
+// ── extract_all ──────────────────────────────────────────────────────────
+
+/// Extract 103 pixel heuristics from raw RGB bytes.
 ///
-/// Args:
-///     pixels: Raw RGB bytes (length must be width * height * 3)
-///     width: Image width in pixels
-///     height: Image height in pixels
+/// ```python
+/// from PIL import Image
+/// import numpy as np
 ///
-/// Returns:
-///     List of 103 float features (100 real + 3 zero-padded)
+/// img = Image.open("page.jpg").convert("RGB")
+/// pixels = np.array(img, dtype=np.uint8).tobytes()
+/// feats = py_features.extract_all(pixels, img.width, img.height)
+/// assert len(feats) == 103  # 100 real + 3 zero-padded
+/// ```
+///
+/// * pixels: `bytes` — RGB bytes (length must equal width × height × 3)
+/// * width: `int`
+/// * height: `int`
+/// * Returns: `list[float]` (length 103)
 #[pyfunction]
 fn extract_all(pixels: Vec<u8>, width: usize, height: usize) -> PyResult<Vec<f64>> {
     let expected = width * height * 3;
@@ -24,10 +69,23 @@ fn extract_all(pixels: Vec<u8>, width: usize, height: usize) -> PyResult<Vec<f64
     Ok(features_core::extract_all(&pixels, width, height))
 }
 
+// ── classify_pdf ─────────────────────────────────────────────────────────
+
 /// Classify a PDF from raw bytes.
 ///
-/// Returns a dict with keys: pdf_type (str), page_count (int),
-/// pages_needing_ocr (list[int]), confidence (float).
+/// ```python
+/// pdf_bytes = open("document.pdf", "rb").read()
+/// result = py_features.classify_pdf(pdf_bytes)
+/// # -> {'pdf_type': 'TextBased', 'page_count': 7,
+/// #     'pages_needing_ocr': [], 'confidence': 1.0}
+/// ```
+///
+/// * data: `bytes` — raw PDF file contents
+/// * Returns: `dict` with keys:
+///     - `pdf_type`: `str` — one of `"TextBased"`, `"Scanned"`, `"ImageBased"`, `"Mixed"`
+///     - `page_count`: `int`
+///     - `pages_needing_ocr`: `list[int]` — 1-indexed page numbers
+///     - `confidence`: `float`
 #[pyfunction]
 fn classify_pdf(data: Vec<u8>) -> PyResult<PyObject> {
     let result = pdf_inspector_core::classify_pdf_mem(&data)
@@ -49,11 +107,28 @@ fn classify_pdf(data: Vec<u8>) -> PyResult<PyObject> {
     })
 }
 
+// ── extract_text_with_positions ───────────────────────────────────────────
+
 /// Extract text items with positions from a PDF memory buffer.
 ///
-/// Returns a list of dicts, each with keys: text, x, y, width, height,
-/// font, font_size, page, is_bold, is_italic, is_underline, is_strikeout,
-/// item_type.
+/// ```python
+/// pdf_bytes = open("document.pdf", "rb").read()
+/// items = py_features.extract_text_with_positions(pdf_bytes)
+/// # -> [{'text': 'Hello', 'x': 72.0, 'y': 720.0, 'width': 45.0,
+/// #      'height': 12.0, 'font': 'F1', 'font_size': 10.0, 'page': 1,
+/// #      'is_bold': False, 'is_italic': False, 'is_underline': False,
+/// #      'is_strikeout': False, 'item_type': 'text'}, ...]
+/// ```
+///
+/// * data: `bytes` — raw PDF file contents
+/// * Returns: `list[dict]` — each dict has:
+///     - `text`: `str`
+///     - `x`, `y`, `width`, `height`: `float`
+///     - `font`: `str` — font name
+///     - `font_size`: `float`
+///     - `page`: `int` — 1-indexed page number
+///     - `is_bold`, `is_italic`, `is_underline`, `is_strikeout`: `bool`
+///     - `item_type`: `str` — one of `"text"`, `"image"`, `"link"`, `"formField"`
 #[pyfunction]
 fn extract_text_with_positions(data: Vec<u8>) -> PyResult<PyObject> {
     let items = pdf_inspector_core::extract_text_with_positions_mem(&data)
@@ -88,7 +163,15 @@ fn extract_text_with_positions(data: Vec<u8>) -> PyResult<PyObject> {
     })
 }
 
-/// A Python module implemented in Rust.
+/// `py_features` — 3 functions, zero config.
+///
+/// ```python
+/// import py_features
+///
+/// feats = py_features.extract_all(raw_rgb_bytes, width, height)
+/// result = py_features.classify_pdf(pdf_bytes)
+/// items = py_features.extract_text_with_positions(pdf_bytes)
+/// ```
 #[pymodule]
 fn py_features(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(extract_all, m)?)?;
