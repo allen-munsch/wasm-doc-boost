@@ -28,13 +28,19 @@ import os
 import sys
 
 import numpy as np
+import py_features
 from PIL import Image
 
-import py_features
-
 LABEL_NAMES = [
-    "is_document", "is_digital", "is_paper", "is_crumpled", "is_shadow",
-    "rotation_0", "rotation_90", "rotation_180", "rotation_270",
+    "is_document",
+    "is_digital",
+    "is_paper",
+    "is_crumpled",
+    "is_shadow",
+    "rotation_0",
+    "rotation_90",
+    "rotation_180",
+    "rotation_270",
 ]
 ROTATION_ANGLES = [0, 90, 180, 270]
 MAX_LONG_EDGE = 512
@@ -47,7 +53,7 @@ def resize_image(img: Image.Image) -> Image.Image:
         return img
     scale = MAX_LONG_EDGE / long_edge
     new_w, new_h = int(w * scale), int(h * scale)
-    return img.resize((new_w, new_h), Image.LANCZOS)
+    return img.resize((new_w, new_h), Image.Resampling.LANCZOS)
 
 
 def extract_features(img: Image.Image) -> np.ndarray:
@@ -64,7 +70,9 @@ def main():
     parser.add_argument("--images", required=True, help="Image directory (e.g. data/images)")
     parser.add_argument("--output", required=True, help="Output .npz path (v2)")
     parser.add_argument("--sample", type=int, default=0, help="Limit to N images (0=all)")
-    parser.add_argument("--chunk", type=str, default="", help="Slice as 'start:end' (0-indexed, end exclusive)")
+    parser.add_argument(
+        "--chunk", type=str, default="", help="Slice as 'start:end' (0-indexed, end exclusive)"
+    )
     args = parser.parse_args()
 
     data = np.load(args.input)
@@ -112,7 +120,7 @@ def main():
             if angle == 0:
                 rotated = img
             else:
-                rotated = img.rotate(-angle, expand=True, resample=Image.BICUBIC)
+                rotated = img.rotate(-angle, expand=True, resample=Image.Resampling.BICUBIC)
 
             try:
                 feats = extract_features(rotated)
@@ -129,7 +137,10 @@ def main():
             new_filenames.append(f"{fname}_rot{angle}")
 
         if (i - chunk_start + 1) % 100 == 0:
-            print(f"  {i - chunk_start + 1}/{n_samples} images processed ({errors} errors)", flush=True)
+            print(
+                f"  {i - chunk_start + 1}/{n_samples} images processed ({errors} errors)",
+                flush=True,
+            )
 
     if not new_features:
         print("No samples produced. Exiting.")
@@ -147,8 +158,10 @@ def main():
     )
 
     file_size = os.path.getsize(args.output)
-    print(f"\nDone: {features.shape[0]} samples, {features.shape[1]} features, "
-          f"{labels.shape[1]} labels ({errors} errors)")
+    print(
+        f"\nDone: {features.shape[0]} samples, {features.shape[1]} features, "
+        f"{labels.shape[1]} labels ({errors} errors)"
+    )
     print(f"Wrote {args.output} ({file_size / 1024:.1f} KB)")
 
     # Label distribution

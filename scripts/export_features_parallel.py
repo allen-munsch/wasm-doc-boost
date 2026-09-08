@@ -6,12 +6,14 @@ Splits labels.csv into N chunks, runs export_features.py on each chunk
 in parallel (subprocess, not multiprocessing.Pool — PyO3 hangs with Pool),
 then merges the .npz files.
 """
+
 import argparse
 import csv
 import os
 import subprocess
 import sys
 import tempfile
+
 import numpy as np
 
 LABEL_NAMES = ["is_document", "is_digital", "is_paper", "is_crumpled", "is_shadow"]
@@ -28,7 +30,7 @@ def split_labels(labels_path: str, n_workers: int, tmpdir: str) -> list[str]:
     chunk_size = (len(rows) + n_workers - 1) // n_workers
     chunks = []
     for i in range(n_workers):
-        chunk_rows = rows[i * chunk_size:(i + 1) * chunk_size]
+        chunk_rows = rows[i * chunk_size : (i + 1) * chunk_size]
         if not chunk_rows:
             break
         chunk_path = os.path.join(tmpdir, f"labels_chunk_{i:03d}.csv")
@@ -47,10 +49,16 @@ def run_worker(chunk_path: str, images_dir: str, output_path: str) -> subprocess
     env = os.environ.copy()
     env["PYO3_USE_ABI3_FORWARD_COMPATIBILITY"] = "1"
     return subprocess.Popen(
-        [sys.executable, "scripts/export_features.py",
-         "--images", images_dir,
-         "--labels", chunk_path,
-         "--output", output_path],
+        [
+            sys.executable,
+            "scripts/export_features.py",
+            "--images",
+            images_dir,
+            "--labels",
+            chunk_path,
+            "--output",
+            output_path,
+        ],
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -75,7 +83,8 @@ def merge_npz(outputs: list[str], final_path: str):
     filenames = np.concatenate(all_filenames, axis=0)
     np.savez_compressed(
         final_path,
-        features=features, labels=labels,
+        features=features,
+        labels=labels,
         filenames=filenames,
         label_names=np.array(LABEL_NAMES),
     )

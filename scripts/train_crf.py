@@ -34,16 +34,18 @@ Usage: python scripts/train_crf.py [--ocr data/fatura2_ocr.json]
 """
 
 import argparse
+import gzip
 import json
-import math
+import os
 import random
 import re
-import sys
+import tempfile
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+import sklearn_crfsuite
 
 ROOT = Path(__file__).resolve().parent.parent
 SEED = 42
@@ -77,39 +79,166 @@ EMAIL_RE = re.compile(r"^[\w.-]+@[\w.-]+\.\w+$")
 PHONE_RE = re.compile(r"^\+\(\d{3}\)\d{3}-\d{4}$")
 ZIP_RE = re.compile(r"^\d{5}(-\d{4})?$")
 
-CRF_LABELS = ["O","ADDRESS","NAME","PHONE","EMAIL","ZIP","ACCOUNT"]
+CRF_LABELS = ["O", "ADDRESS", "NAME", "PHONE", "EMAIL", "ZIP", "ACCOUNT"]
 
 # ── Gazetteer features for ADDRESS disambiguation ──────
 STREET_SUFFIXES = {
-    "street", "st", "st.", "avenue", "ave", "ave.", "road", "rd", "rd.",
-    "drive", "dr", "dr.", "lane", "ln", "ln.", "court", "ct", "ct.",
-    "boulevard", "blvd", "blvd.", "way", "place", "pl", "pl.",
-    "causeway", "cswy", "highway", "hwy", "parkway", "pkwy",
-    "circle", "cir", "trail", "trl", "suite", "ste", "apt", "unit",
-    "po", "p.o.", "box",
-    "terrace", "ter", "ter.", "square", "sq", "plaza", "plz", "mall",
+    "street",
+    "st",
+    "st.",
+    "avenue",
+    "ave",
+    "ave.",
+    "road",
+    "rd",
+    "rd.",
+    "drive",
+    "dr",
+    "dr.",
+    "lane",
+    "ln",
+    "ln.",
+    "court",
+    "ct",
+    "ct.",
+    "boulevard",
+    "blvd",
+    "blvd.",
+    "way",
+    "place",
+    "pl",
+    "pl.",
+    "causeway",
+    "cswy",
+    "highway",
+    "hwy",
+    "parkway",
+    "pkwy",
+    "circle",
+    "cir",
+    "trail",
+    "trl",
+    "suite",
+    "ste",
+    "apt",
+    "unit",
+    "po",
+    "p.o.",
+    "box",
+    "terrace",
+    "ter",
+    "ter.",
+    "square",
+    "sq",
+    "plaza",
+    "plz",
+    "mall",
 }
 
 STATE_ABBREV = {
-    "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA",
-    "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD",
-    "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ",
-    "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC",
-    "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY",
-    "DC", "AS", "GU", "MP", "PR", "VI",
+    "AL",
+    "AK",
+    "AZ",
+    "AR",
+    "CA",
+    "CO",
+    "CT",
+    "DE",
+    "FL",
+    "GA",
+    "HI",
+    "ID",
+    "IL",
+    "IN",
+    "IA",
+    "KS",
+    "KY",
+    "LA",
+    "ME",
+    "MD",
+    "MA",
+    "MI",
+    "MN",
+    "MS",
+    "MO",
+    "MT",
+    "NE",
+    "NV",
+    "NH",
+    "NJ",
+    "NM",
+    "NY",
+    "NC",
+    "ND",
+    "OH",
+    "OK",
+    "OR",
+    "PA",
+    "RI",
+    "SC",
+    "SD",
+    "TN",
+    "TX",
+    "UT",
+    "VT",
+    "VA",
+    "WA",
+    "WV",
+    "WI",
+    "WY",
+    "DC",
+    "AS",
+    "GU",
+    "MP",
+    "PR",
+    "VI",
     # Freely Associated States (appear in FATURA2 synthetic data)
-    "FM", "MH", "PW",
+    "FM",
+    "MH",
+    "PW",
 }
 
 DIRECTION_WORDS = {
-    "n", "s", "e", "w", "north", "south", "east", "west",
-    "ne", "nw", "se", "sw", "n.e.", "n.w.", "s.e.", "s.w.",
-    "northeast", "northwest", "southeast", "southwest",
+    "n",
+    "s",
+    "e",
+    "w",
+    "north",
+    "south",
+    "east",
+    "west",
+    "ne",
+    "nw",
+    "se",
+    "sw",
+    "n.e.",
+    "n.w.",
+    "s.e.",
+    "s.w.",
+    "northeast",
+    "northwest",
+    "southeast",
+    "southwest",
 }
 
 TITLE_PREFIXES = {
-    "mr", "mr.", "mrs", "mrs.", "ms", "ms.", "miss", "dr", "dr.",
-    "prof", "prof.", "sr", "sr.", "jr", "jr.", "md", "phd",
+    "mr",
+    "mr.",
+    "mrs",
+    "mrs.",
+    "ms",
+    "ms.",
+    "miss",
+    "dr",
+    "dr.",
+    "prof",
+    "prof.",
+    "sr",
+    "sr.",
+    "jr",
+    "jr.",
+    "md",
+    "phd",
 }
 
 
@@ -199,10 +328,10 @@ def refine_labels(tokens: list[str], ner_tags: list[int]) -> list[str]:
         span_tokens = [tokens[i].lower().rstrip(",.") for i in range(span_start, span_end + 1)]
         span_text = " ".join(span_tokens)
         has_address_signal = (
-            any(t in STREET_SUFFIXES for t in span_tokens) or
-            any(t.upper() in STATE_ABBREV and len(t) == 2 for t in span_tokens) or
-            any(t in DIRECTION_WORDS for t in span_tokens) or
-            bool(ZIP_RE.search(span_text))
+            any(t in STREET_SUFFIXES for t in span_tokens)
+            or any(t.upper() in STATE_ABBREV and len(t) == 2 for t in span_tokens)
+            or any(t in DIRECTION_WORDS for t in span_tokens)
+            or bool(ZIP_RE.search(span_text))
         )
 
         if not has_address_signal:
@@ -276,6 +405,7 @@ def refine_labels(tokens: list[str], ner_tags: list[int]) -> list[str]:
 
 # ── Feature extraction ───────────────────────────────
 
+
 def token_shape(token: str) -> str:
     """Character shape: uppercase→A, lowercase→a, digit→0, other→-"""
     result = []
@@ -291,7 +421,9 @@ def token_shape(token: str) -> str:
     return "".join(result)
 
 
-def extract_features(tokens: list[str], i: int, bboxes: list[list] | None = None, line_info: dict | None = None) -> dict[str, Any]:
+def extract_features(
+    tokens: list[str], i: int, bboxes: list[list] | None = None, line_info: dict | None = None
+) -> dict[str, Any]:
     """Extract CRF features for token at position i."""
     t = tokens[i]
     feats = {}
@@ -319,7 +451,9 @@ def extract_features(tokens: list[str], i: int, bboxes: list[list] | None = None
     feats["w_street_suffix"] = "1" if tl in STREET_SUFFIXES else "0"
     feats["w_state_abbrev"] = "1" if t.upper() in STATE_ABBREV and len(t) == 2 else "0"
     feats["w_direction"] = "1" if tl in DIRECTION_WORDS else "0"
-    feats["w_is_bldg_num"] = "1" if (t[0].isdigit() and 1 <= len(t) <= 5 and not t.isdigit()) else "0"
+    feats["w_is_bldg_num"] = (
+        "1" if (t[0].isdigit() and 1 <= len(t) <= 5 and not t.isdigit()) else "0"
+    )
     feats["w_title_prefix"] = "1" if tl in TITLE_PREFIXES else "0"
     feats["w_po_box"] = "1" if tl in {"po", "p.o.", "box", "p.o", "pobox"} else "0"
 
@@ -355,7 +489,7 @@ def extract_features(tokens: list[str], i: int, bboxes: list[list] | None = None
         feats["w_starts"] = "D"
     elif t[0].isalpha():
         feats["w_starts"] = "A"
-    elif t[0] in {'.', ',', '-', '/', '(', ')'}:
+    elif t[0] in {".", ",", "-", "/", "(", ")"}:
         feats["w_starts"] = "P"
     else:
         feats["w_starts"] = "X"
@@ -409,6 +543,7 @@ def tokens_to_features(tokens: list[str], bboxes: list[list] | None = None) -> l
 
 # ── Data loading ─────────────────────────────────────
 
+
 def load_clean_gt(gt_path: str, max_samples: int = 0) -> list[tuple[list[str], list[str]]]:
     """Load clean FATURA2 tokenized GT: returns [(tokens, crf_labels), ...]."""
     with open(gt_path) as f:
@@ -423,14 +558,16 @@ def load_clean_gt(gt_path: str, max_samples: int = 0) -> list[tuple[list[str], l
         tokens = s["tokens"]
         labels = refine_labels(tokens, s["tags"])
         # Skip sequences with only O labels
-        if all(l == "O" for l in labels):
+        if all(label == "O" for label in labels):
             continue
         sequences.append((tokens, labels))
 
     return sequences
 
 
-def align_ocr_to_gt(ocr_words: list[dict], gt_tokens: list[str], gt_labels: list[str]) -> tuple[list[str], list[str], list[list]]:
+def align_ocr_to_gt(
+    ocr_words: list[dict], gt_tokens: list[str], gt_labels: list[str]
+) -> tuple[list[str], list[str], list[list]]:
     """
     Fuzzy-align OCR word output to ground truth tokens.
     Returns (ocr_tokens, aligned_labels, bboxes).
@@ -438,10 +575,6 @@ def align_ocr_to_gt(ocr_words: list[dict], gt_tokens: list[str], gt_labels: list
     """
     ocr_texts = [w["text"] for w in ocr_words]
     ocr_bboxes = [w["bbox"] for w in ocr_words]
-    ocr_confidences = [w["confidence"] for w in ocr_words]
-
-    # Build clean text from GT tokens
-    gt_text = " ".join(gt_tokens)
 
     # Simple approach: align by word position and fuzzy match
     # For each GT token, find the closest OCR word by Levenshtein distance
@@ -480,16 +613,20 @@ def _levenshtein(a: str, b: str) -> int:
     for i, ca in enumerate(a, 1):
         curr = [i]
         for j, cb in enumerate(b, 1):
-            curr.append(min(
-                prev[j] + 1,
-                curr[-1] + 1,
-                prev[j - 1] + (0 if ca == cb else 1),
-            ))
+            curr.append(
+                min(
+                    prev[j] + 1,
+                    curr[-1] + 1,
+                    prev[j - 1] + (0 if ca == cb else 1),
+                )
+            )
         prev = curr
     return prev[-1]
 
 
-def load_ocr_data(ocr_path: str, gt_path: str, max_samples: int = 0) -> list[tuple[list[str], list[str], list[list]]]:
+def load_ocr_data(
+    ocr_path: str, gt_path: str, max_samples: int = 0
+) -> list[tuple[list[str], list[str], list[list]]]:
     """Load OCR data and align to GT. Returns [(tokens, labels, bboxes), ...]."""
     with open(ocr_path) as f:
         ocr_data = json.load(f)
@@ -522,9 +659,11 @@ def load_ocr_data(ocr_path: str, gt_path: str, max_samples: int = 0) -> list[tup
         if not ocr_words:
             continue
 
-        ocr_tokens, aligned_labels, aligned_bboxes = align_ocr_to_gt(ocr_words, gt_tokens, gt_labels)
+        ocr_tokens, aligned_labels, aligned_bboxes = align_ocr_to_gt(
+            ocr_words, gt_tokens, gt_labels
+        )
 
-        if not ocr_tokens or not any(l != "O" for l in aligned_labels):
+        if not ocr_tokens or not any(label != "O" for label in aligned_labels):
             continue
 
         sequences.append((ocr_tokens, aligned_labels, aligned_bboxes))
@@ -535,13 +674,23 @@ def load_ocr_data(ocr_path: str, gt_path: str, max_samples: int = 0) -> list[tup
 # ── Synthetic augmentation ───────────────────────────
 
 OCR_MISTAKES = {
-    "I": "l", "l": "I", "O": "0", "0": "O",
-    "S": "5", "5": "S", "B": "8", "8": "B",
-    "1": "l", "rn": "m", "m": "rn",
+    "I": "l",
+    "l": "I",
+    "O": "0",
+    "0": "O",
+    "S": "5",
+    "5": "S",
+    "B": "8",
+    "8": "B",
+    "1": "l",
+    "rn": "m",
+    "m": "rn",
 }
 
 
-def generate_synthetic(sequences: list[tuple[list[str], list[str]]], n_variants: int = 2) -> list[tuple[list[str], list[str]]]:
+def generate_synthetic(
+    sequences: list[tuple[list[str], list[str]]], n_variants: int = 2
+) -> list[tuple[list[str], list[str]]]:
     """Generate synthetic variants with OCR-like noise."""
     synthetic = []
     rng = random.Random(SEED)
@@ -578,13 +727,14 @@ def generate_synthetic(sequences: list[tuple[list[str], list[str]]], n_variants:
                 variant_tokens.insert(split_at, "\n")
                 variant_labels.insert(split_at, "O")
 
-            if len(variant_tokens) >= 2 and any(l != "O" for l in variant_labels):
+            if len(variant_tokens) >= 2 and any(label != "O" for label in variant_labels):
                 synthetic.append((variant_tokens, variant_labels))
 
     return synthetic
 
 
 # ── Main training ────────────────────────────────────
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -599,7 +749,9 @@ def main():
     parser.add_argument("--output", default="data/crf_model.json")
     parser.add_argument("--kfold", type=int, default=0, help="Run k-fold cross-validation (0=skip)")
     parser.add_argument("--save-folds", action="store_true", help="Save per-fold metrics to JSON")
-    parser.add_argument("--holdout", type=float, default=0.15, help="Hold-out fraction (used when --kfold=0)")
+    parser.add_argument(
+        "--holdout", type=float, default=0.15, help="Hold-out fraction (used when --kfold=0)"
+    )
     args = parser.parse_args()
 
     gt_path = ROOT / args.gt
@@ -654,8 +806,6 @@ def main():
         y.append(labels)
 
     # ── Shuffle ────────────────────────────────────────
-    import sklearn_crfsuite
-    from sklearn_crfsuite import metrics as crf_metrics
 
     rng = random.Random(SEED)
     indices = list(range(len(X)))
@@ -675,28 +825,52 @@ def main():
 
     def eval_crf(model, x_ev, y_ev):
         y_pred = model.predict(x_ev)
-        labels = sorted(set(l for seq in y_ev for l in seq))
+        labels = sorted(set(label for seq in y_ev for label in seq))
         metrics = {}
         for label in labels:
-            tp = sum(1 for s, p in zip(y_ev, y_pred) for t, p_ in zip(s, p) if t == label and p_ == label)
-            fp = sum(1 for s, p in zip(y_ev, y_pred) for t, p_ in zip(s, p) if t != label and p_ == label)
-            fn = sum(1 for s, p in zip(y_ev, y_pred) for t, p_ in zip(s, p) if t == label and p_ != label)
+            tp = sum(
+                1 for s, p in zip(y_ev, y_pred) for t, p_ in zip(s, p) if t == label and p_ == label
+            )
+            fp = sum(
+                1 for s, p in zip(y_ev, y_pred) for t, p_ in zip(s, p) if t != label and p_ == label
+            )
+            fn = sum(
+                1 for s, p in zip(y_ev, y_pred) for t, p_ in zip(s, p) if t == label and p_ != label
+            )
             precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
             recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
             f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
             beta = 5
-            f5 = (1 + beta ** 2) * precision * recall / (beta ** 2 * precision + recall) if (beta ** 2 * precision + recall) > 0 else 0.0
-            metrics[label] = {"precision": precision, "recall": recall, "f1": f1, "f5": f5,
-                              "tp": tp, "fp": fp, "fn": fn}
+            f5 = (
+                (1 + beta**2) * precision * recall / (beta**2 * precision + recall)
+                if (beta**2 * precision + recall) > 0
+                else 0.0
+            )
+            metrics[label] = {
+                "precision": precision,
+                "recall": recall,
+                "f1": f1,
+                "f5": f5,
+                "tp": tp,
+                "fp": fp,
+                "fn": fn,
+            }
         return y_pred, metrics, labels
 
     def compute_macro(metrics_dict: dict) -> dict:
         ps, rs, f1s, f5s = [], [], [], []
         for m in metrics_dict.values():
-            ps.append(m["precision"]); rs.append(m["recall"])
-            f1s.append(m["f1"]); f5s.append(m["f5"])
+            ps.append(m["precision"])
+            rs.append(m["recall"])
+            f1s.append(m["f1"])
+            f5s.append(m["f5"])
         n = len(ps) or 1
-        return {"precision": sum(ps)/n, "recall": sum(rs)/n, "f1": sum(f1s)/n, "f5": sum(f5s)/n}
+        return {
+            "precision": sum(ps) / n,
+            "recall": sum(rs) / n,
+            "f1": sum(f1s) / n,
+            "f5": sum(f5s) / n,
+        }
 
     if args.kfold > 0:
         # ── k-fold cross-validation ────────────────────
@@ -726,14 +900,27 @@ def main():
 
             train_macro = compute_macro(train_m)
             val_macro = compute_macro(val_m)
-            print(f"  Train MACRO: P={train_macro['precision']:.4f} R={train_macro['recall']:.4f} F5={train_macro['f5']:.4f}")
-            print(f"  Val   MACRO: P={val_macro['precision']:.4f} R={val_macro['recall']:.4f} F5={val_macro['f5']:.4f}")
+            print(
+                f"  Train MACRO: P={train_macro['precision']:.4f} R={train_macro['recall']:.4f} F5={train_macro['f5']:.4f}"
+            )
+            print(
+                f"  Val   MACRO: P={val_macro['precision']:.4f} R={val_macro['recall']:.4f} F5={val_macro['f5']:.4f}"
+            )
             print(f"  Gap (R):     {train_macro['recall'] - val_macro['recall']:+.4f}")
             for label in sorted(val_m):
                 m = val_m[label]
-                print(f"    {label:<12} P={m['precision']:.4f} R={m['recall']:.4f} F5={m['f5']:.4f} (TP={m['tp']} FP={m['fp']} FN={m['fn']})")
-            fold_metrics.append({"fold": fold + 1, "train": train_m, "val": val_m,
-                                  "train_macro": train_macro, "val_macro": val_macro})
+                print(
+                    f"    {label:<12} P={m['precision']:.4f} R={m['recall']:.4f} F5={m['f5']:.4f} (TP={m['tp']} FP={m['fp']} FN={m['fn']})"
+                )
+            fold_metrics.append(
+                {
+                    "fold": fold + 1,
+                    "train": train_m,
+                    "val": val_m,
+                    "train_macro": train_macro,
+                    "val_macro": val_macro,
+                }
+            )
 
         # ── Aggregate across folds ─────────────────────
         print(f"\n=== Aggregate ({k} folds) ===")
@@ -748,13 +935,17 @@ def main():
                     rs.append(fm["val"][label]["recall"])
                     f5s.append(fm["val"][label]["f5"])
             if ps:
-                print(f"  {label:<12} P={np.mean(ps):.4f}±{np.std(ps):.4f}  R={np.mean(rs):.4f}±{np.std(rs):.4f}  F5={np.mean(f5s):.4f}±{np.std(f5s):.4f}")
+                print(
+                    f"  {label:<12} P={np.mean(ps):.4f}±{np.std(ps):.4f}  R={np.mean(rs):.4f}±{np.std(rs):.4f}  F5={np.mean(f5s):.4f}±{np.std(f5s):.4f}"
+                )
         # Macro
         macro_ps = [fm["val_macro"]["precision"] for fm in fold_metrics]
         macro_rs = [fm["val_macro"]["recall"] for fm in fold_metrics]
         macro_f5s = [fm["val_macro"]["f5"] for fm in fold_metrics]
         macro_f1s = [fm["val_macro"]["f1"] for fm in fold_metrics]
-        print(f"  {'MACRO':<12} P={np.mean(macro_ps):.4f}±{np.std(macro_ps):.4f}  R={np.mean(macro_rs):.4f}±{np.std(macro_rs):.4f}  F1={np.mean(macro_f1s):.4f}±{np.std(macro_f1s):.4f}  F5={np.mean(macro_f5s):.4f}±{np.std(macro_f5s):.4f}")
+        print(
+            f"  {'MACRO':<12} P={np.mean(macro_ps):.4f}±{np.std(macro_ps):.4f}  R={np.mean(macro_rs):.4f}±{np.std(macro_rs):.4f}  F1={np.mean(macro_f1s):.4f}±{np.std(macro_f1s):.4f}  F5={np.mean(macro_f5s):.4f}±{np.std(macro_f5s):.4f}"
+        )
 
         # Train vs validation gap
         train_macro_rs = [fm["train_macro"]["recall"] for fm in fold_metrics]
@@ -764,10 +955,23 @@ def main():
         if args.save_folds:
             fold_path = Path(args.output).with_suffix(".folds.json")
             with open(fold_path, "w") as f:
-                json.dump({"k": k, "folds": fold_metrics,
-                           "aggregate": {"macro": {"precision": float(np.mean(macro_ps)), "recall": float(np.mean(macro_rs)),
-                                                    "f1": float(np.mean(macro_f1s)), "f5": float(np.mean(macro_f5s))},
-                                         "recall_gap": float(np.mean(gaps))}}, f, indent=2)
+                json.dump(
+                    {
+                        "k": k,
+                        "folds": fold_metrics,
+                        "aggregate": {
+                            "macro": {
+                                "precision": float(np.mean(macro_ps)),
+                                "recall": float(np.mean(macro_rs)),
+                                "f1": float(np.mean(macro_f1s)),
+                                "f5": float(np.mean(macro_f5s)),
+                            },
+                            "recall_gap": float(np.mean(gaps)),
+                        },
+                    },
+                    f,
+                    indent=2,
+                )
             print(f"Folds saved: {fold_path}")
 
         # Train final model on all data for export
@@ -795,11 +999,11 @@ def main():
         print(f"Sequences: {len(X_val)}, Labels: {labels_present}\n")
         for label in labels_present:
             m = val_metrics[label]
-            print(f"  {label:<12} P={m['precision']:.4f}  R={m['recall']:.4f}  F1={m['f1']:.4f}  F5={m['f5']:.4f}  (TP={m['tp']} FP={m['fp']} FN={m['fn']})")
+            print(
+                f"  {label:<12} P={m['precision']:.4f}  R={m['recall']:.4f}  F1={m['f1']:.4f}  F5={m['f5']:.4f}  (TP={m['tp']} FP={m['fp']} FN={m['fn']})"
+            )
 
     # ── Serialize: dump to temp file, parse manually ──
-    import tempfile
-    import os
 
     with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as tmp:
         dump_file = tmp.name
@@ -874,7 +1078,6 @@ def main():
     size_kb = out_path.stat().st_size / 1024
     print(f"\nModel size: {size_kb:.1f} KB")
 
-    import gzip
     with open(out_path, "rb") as f:
         compressed = gzip.compress(f.read())
     print(f"Gzipped size: {len(compressed) / 1024:.1f} KB")

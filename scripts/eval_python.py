@@ -10,8 +10,8 @@ import math
 import os
 import time
 from collections import defaultdict
-from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor
+from pathlib import Path
 
 import numpy as np
 from PIL import Image
@@ -22,8 +22,8 @@ LABEL_NAMES = ["is_document", "is_digital", "is_paper", "is_crumpled", "is_shado
 
 # ── Global state (set once per worker process via initializer) ──
 
-_model_trees = None
-_trees_per_label = None
+_model_trees: list[dict] | None = None
+_trees_per_label: int | None = None
 
 
 def sigmoid(x: float) -> float:
@@ -38,7 +38,7 @@ def _init_worker(model_path: str, tpl: int):
     _trees_per_label = tpl
 
 
-def _predict_one(trees, tree_idx: int, features: list[float]) -> float:
+def _predict_one(trees: list[dict], tree_idx: int, features: list[float]) -> float:
     node = trees[tree_idx]
     while "leaf" not in node:
         feat_idx = int(node["split"][1:])
@@ -46,7 +46,7 @@ def _predict_one(trees, tree_idx: int, features: list[float]) -> float:
             node = node["children"][0]
         else:
             node = node["children"][1]
-    return node["leaf"]
+    return float(node["leaf"])
 
 
 def _classify_chunk(chunk: list[tuple[str, list[int]]]) -> dict:
@@ -84,11 +84,13 @@ def _classify_chunk(chunk: list[tuple[str, list[int]]]) -> dict:
 
         # Sum logits per label, apply sigmoid
         preds = []
+        trees = _model_trees
+        assert trees is not None
         for label_idx in range(len(LABEL_NAMES)):
             tpl = _trees_per_label or 0
             start = label_idx * tpl
             end = start + tpl
-            logit = sum(_predict_one(_model_trees, i, features) for i in range(start, end))
+            logit = sum((_predict_one(trees, i, features) for i in range(start, end)), 0.0)
             preds.append(sigmoid(logit))
 
         for j in range(len(LABEL_NAMES)):
@@ -172,13 +174,17 @@ def main():
                     confusion[j][k] += result["confusion"][j][k]
             elapsed = time.monotonic() - t0
             rate = total_classified / elapsed if elapsed > 0 else 0
-            print(f"  chunk {completed}/{len(chunks)} — {total_classified} done ({elapsed:.1f}s, {rate:.0f} img/s)")
+            print(
+                f"  chunk {completed}/{len(chunks)} — {total_classified} done ({elapsed:.1f}s, {rate:.0f} img/s)"
+            )
 
     elapsed = time.monotonic() - t0
-    print(f"Done. {total_classified} classified, {total_errors} errors in {elapsed:.1f}s ({total_classified/elapsed:.0f} img/s)")
+    print(
+        f"Done. {total_classified} classified, {total_errors} errors in {elapsed:.1f}s ({total_classified / elapsed:.0f} img/s)"
+    )
 
     # Metrics
-    print(f"\n=== Python GBDT Classification Evaluation ===")
+    print("\n=== Python GBDT Classification Evaluation ===")
     print(f"Images: {len(eval_set)}, Errors: {total_errors}, Time: {elapsed:.1f}s\n")
 
     report = {}

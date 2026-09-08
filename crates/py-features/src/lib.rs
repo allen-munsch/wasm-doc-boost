@@ -163,7 +163,16 @@ fn extract_text_with_positions(data: Vec<u8>) -> PyResult<PyObject> {
     })
 }
 
-/// `py_features` — 3 functions, zero config.
+// ── is_release_build ─────────────────────────────────────────────────────
+
+/// Check if this Rust binary was built in optimized release mode.
+/// Returns true if release, false if debug (compiled with debug assertions).
+#[pyfunction]
+fn is_release_build() -> bool {
+    cfg!(not(debug_assertions))
+}
+
+/// `py_features` — 4 functions, zero config.
 ///
 /// ```python
 /// import py_features
@@ -171,11 +180,13 @@ fn extract_text_with_positions(data: Vec<u8>) -> PyResult<PyObject> {
 /// feats = py_features.extract_all(raw_rgb_bytes, width, height)
 /// result = py_features.classify_pdf(pdf_bytes)
 /// items = py_features.extract_text_with_positions(pdf_bytes)
+/// is_rel = py_features.is_release_build()
 /// ```
 #[pymodule]
 fn py_features(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(extract_all, m)?)?;
     m.add_function(wrap_pyfunction!(classify_pdf, m)?)?;
     m.add_function(wrap_pyfunction!(extract_text_with_positions, m)?)?;
+    m.add_function(wrap_pyfunction!(is_release_build, m)?)?;
     Ok(())
 }

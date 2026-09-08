@@ -10,24 +10,21 @@ Outputs flat image directories ready for feature extraction.
 
 import argparse
 import io
-import json
 import os
-import sys
 from pathlib import Path
-from urllib.request import Request, urlopen
 
-import numpy as np
+import pandas as pd
 from PIL import Image
 
 
 def extract_cordv2(data_dir: str, out_dir: str, max_images: int | None = None) -> int:
     """Extract PNG/JPEG images from CORD-v2 parquet files."""
-    import pandas as pd
-
     parquet_dir = os.path.join(data_dir, "data")
     pq_files = sorted(Path(parquet_dir).glob("*.parquet"))
     if not pq_files:
-        print("  No parquet files found. Download first: hf download naver-clova-ix/cord-v2 --repo-type dataset --local-dir data/cord-v2")
+        print(
+            "  No parquet files found. Download first: hf download naver-clova-ix/cord-v2 --repo-type dataset --local-dir data/cord-v2"
+        )
         return 0
 
     os.makedirs(out_dir, exist_ok=True)
@@ -62,12 +59,12 @@ def extract_cordv2(data_dir: str, out_dir: str, max_images: int | None = None) -
 
 def extract_publaynet(data_dir: str, out_dir: str, max_images: int | None = None) -> int:
     """Extract images from PubLayNet HF parquet files."""
-    import pandas as pd
-
     parquet_dir = os.path.join(data_dir, "data")
     pq_files = sorted(Path(parquet_dir).glob("*.parquet"))
     if not pq_files:
-        print("  No parquet files found. Download first via hf download jordanparker6/publaynet --repo-type dataset --local-dir data/publaynet")
+        print(
+            "  No parquet files found. Download first via hf download jordanparker6/publaynet --repo-type dataset --local-dir data/publaynet"
+        )
         return 0
 
     os.makedirs(out_dir, exist_ok=True)
@@ -104,12 +101,15 @@ def extract_publaynet(data_dir: str, out_dir: str, max_images: int | None = None
 
 def main():
     parser = argparse.ArgumentParser(description="Extract images from HF parquet datasets")
-    parser.add_argument("--dataset", choices=["cord-v2", "publaynet", "all"],
-                        default="all", help="Which dataset to extract")
+    parser.add_argument(
+        "--dataset",
+        choices=["cord-v2", "publaynet", "all"],
+        default="all",
+        help="Which dataset to extract",
+    )
     parser.add_argument("--data-dir", default="data", help="Base data directory")
     parser.add_argument("--out-dir", default="data/images", help="Output image directory")
-    parser.add_argument("--max-images", type=int, default=None,
-                        help="Max images per dataset")
+    parser.add_argument("--max-images", type=int, default=None, help="Max images per dataset")
     args = parser.parse_args()
 
     datasets = ["cord-v2", "publaynet"] if args.dataset == "all" else [args.dataset]

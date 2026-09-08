@@ -19,13 +19,12 @@ Strategy:
 import argparse
 import json
 import os
-import sys
 from typing import Any
 
 import numpy as np
 import xgboost as xgb
-from sklearn.model_selection import train_test_split, StratifiedKFold
-from sklearn.metrics import roc_auc_score, precision_recall_fscore_support
+from sklearn.metrics import precision_recall_fscore_support, roc_auc_score
+from sklearn.model_selection import StratifiedKFold, train_test_split
 
 LABEL_NAMES = ["is_document", "is_digital", "is_paper", "is_crumpled", "is_shadow"]
 BASE_PARAMS: dict[str, Any] = {
@@ -120,13 +119,13 @@ def train_models(X_train: np.ndarray, y_train: np.ndarray) -> list[xgb.XGBClassi
         )
         model.fit(X_train, y_train[:, i])
         models.append(model)
-        print(f"  {name}: {model.n_estimators} trees, "
-              f"pos_weight={scale_pos_weight:.1f}")
+        print(f"  {name}: {model.n_estimators} trees, pos_weight={scale_pos_weight:.1f}")
     return models
 
 
-def evaluate(models: list[xgb.XGBClassifier], X_test: np.ndarray,
-             y_test: np.ndarray) -> dict[str, Any]:
+def evaluate(
+    models: list[xgb.XGBClassifier], X_test: np.ndarray, y_test: np.ndarray
+) -> dict[str, Any]:
     """Compute per-label AUC, precision, recall."""
     metrics = {}
     print("\n=== Evaluation ===")
@@ -137,11 +136,12 @@ def evaluate(models: list[xgb.XGBClassifier], X_test: np.ndarray,
         precision, recall, f1, _ = precision_recall_fscore_support(
             y_test[:, i], y_pred, average="binary", zero_division=0
         )
-        metrics[name] = {"auc": auc, "precision": precision,
-                         "recall": recall, "f1": f1}
+        metrics[name] = {"auc": auc, "precision": precision, "recall": recall, "f1": f1}
         pos = y_test[:, i].sum()
-        print(f"  {name}: AUC={auc:.4f}, P={precision:.3f}, R={recall:.3f}, "
-              f"F1={f1:.3f} (pos={int(pos)})")
+        print(
+            f"  {name}: AUC={auc:.4f}, P={precision:.3f}, R={recall:.3f}, "
+            f"F1={f1:.3f} (pos={int(pos)})"
+        )
     return metrics
 
 
@@ -156,7 +156,7 @@ def kfold_cv(X: np.ndarray, y: np.ndarray, k: int = 5) -> dict[str, Any]:
     skf = StratifiedKFold(n_splits=k, shuffle=True, random_state=42)
 
     # Per-label accumulators: train_metrics and val_metrics per fold
-    fold_results = []
+    fold_results: list[dict[str, Any]] = []
     for fold_idx, (train_idx, val_idx) in enumerate(skf.split(X, label_keys)):
         X_tr, X_val = X[train_idx], X[val_idx]
         y_tr, y_val = y[train_idx], y[val_idx]
@@ -167,13 +167,15 @@ def kfold_cv(X: np.ndarray, y: np.ndarray, k: int = 5) -> dict[str, Any]:
         train_metrics = _eval_split(models, X_tr, y_tr, "Train")
         val_metrics = _eval_split(models, X_val, y_val, "Val")
 
-        fold_results.append({
-            "fold": fold_idx + 1,
-            "train_size": len(X_tr),
-            "val_size": len(X_val),
-            "train": train_metrics,
-            "val": val_metrics,
-        })
+        fold_results.append(
+            {
+                "fold": fold_idx + 1,
+                "train_size": len(X_tr),
+                "val_size": len(X_val),
+                "train": train_metrics,
+                "val": val_metrics,
+            }
+        )
 
     # Aggregate across folds: mean ± std per label per metric
     def _aggregate(key: str) -> dict:
@@ -217,22 +219,28 @@ def kfold_cv(X: np.ndarray, y: np.ndarray, k: int = 5) -> dict[str, Any]:
         auc_gap = v["auc_mean"] - t["auc_mean"]
         f5_gap = v["f5_mean"] - t["f5_mean"]
         rec_gap = v["recall_mean"] - t["recall_mean"]
-        print(f"{name:<14} {'Train':<6} "
-              f"{t['auc_mean']:.4f}±{t['auc_std']:.4f}     "
-              f"{t['f5_mean']:.4f}±{t['f5_std']:.4f}     "
-              f"{t['recall_mean']:.4f}±{t['recall_std']:.4f}   "
-              f"{t['precision_mean']:.4f}±{t['precision_std']:.4f}")
-        print(f"{'':<14} {'Val':<6} "
-              f"{v['auc_mean']:.4f}±{v['auc_std']:.4f}     "
-              f"{v['f5_mean']:.4f}±{v['f5_std']:.4f}     "
-              f"{v['recall_mean']:.4f}±{v['recall_std']:.4f}   "
-              f"{v['precision_mean']:.4f}±{v['precision_std']:.4f}")
+        print(
+            f"{name:<14} {'Train':<6} "
+            f"{t['auc_mean']:.4f}±{t['auc_std']:.4f}     "
+            f"{t['f5_mean']:.4f}±{t['f5_std']:.4f}     "
+            f"{t['recall_mean']:.4f}±{t['recall_std']:.4f}   "
+            f"{t['precision_mean']:.4f}±{t['precision_std']:.4f}"
+        )
+        print(
+            f"{'':<14} {'Val':<6} "
+            f"{v['auc_mean']:.4f}±{v['auc_std']:.4f}     "
+            f"{v['f5_mean']:.4f}±{v['f5_std']:.4f}     "
+            f"{v['recall_mean']:.4f}±{v['recall_std']:.4f}   "
+            f"{v['precision_mean']:.4f}±{v['precision_std']:.4f}"
+        )
         gap_marker = " <-- OVERFIT?" if (rec_gap < -0.02 or f5_gap < -0.02) else ""
-        print(f"{'':<14} {'Gap':<6} "
-              f"{auc_gap:+.4f}             "
-              f"{f5_gap:+.4f}             "
-              f"{rec_gap:+.4f}           "
-              f"{v['precision_mean'] - t['precision_mean']:+.4f}{gap_marker}")
+        print(
+            f"{'':<14} {'Gap':<6} "
+            f"{auc_gap:+.4f}             "
+            f"{f5_gap:+.4f}             "
+            f"{rec_gap:+.4f}           "
+            f"{v['precision_mean'] - t['precision_mean']:+.4f}{gap_marker}"
+        )
 
     return {
         "k": k,
@@ -244,8 +252,9 @@ def kfold_cv(X: np.ndarray, y: np.ndarray, k: int = 5) -> dict[str, Any]:
     }
 
 
-def _eval_split(models: list[xgb.XGBClassifier], X: np.ndarray,
-                 y: np.ndarray, tag: str) -> dict[str, Any]:
+def _eval_split(
+    models: list[xgb.XGBClassifier], X: np.ndarray, y: np.ndarray, tag: str
+) -> dict[str, Any]:
     """Evaluate models on a split, print summary."""
     metrics = {}
     for i, name in enumerate(LABEL_NAMES):
@@ -255,8 +264,7 @@ def _eval_split(models: list[xgb.XGBClassifier], X: np.ndarray,
         precision, recall, f1, _ = precision_recall_fscore_support(
             y[:, i], y_pred, average="binary", zero_division=0
         )
-        metrics[name] = {"auc": auc, "precision": precision,
-                         "recall": recall, "f1": f1}
+        metrics[name] = {"auc": auc, "precision": precision, "recall": recall, "f1": f1}
     return metrics
 
 
@@ -267,7 +275,7 @@ def export_merged_model(models: list[xgb.XGBClassifier], output_path: str) -> No
     Trees are ordered by label: first all is_document trees, then is_digital, etc.
     gbdt.rs::from_xgboost_json splits by total_trees / num_labels.
     """
-    all_trees = []
+    all_trees: list[Any] = []
     for model in models:
         booster = model.get_booster()
         tree_dump = booster.get_dump(dump_format="json")
@@ -291,15 +299,13 @@ def compute_feature_importance(models: list[xgb.XGBClassifier]) -> np.ndarray:
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Train multi-label XGBoost for wasm-doc-boost")
+    parser = argparse.ArgumentParser(description="Train multi-label XGBoost for wasm-doc-boost")
     parser.add_argument("--features", required=True, help="features.npz path")
-    parser.add_argument("--output", default="data/model.json",
-                        help="Output JSON model path")
-    parser.add_argument("--report", default="data/report.json",
-                        help="Evaluation report path")
-    parser.add_argument("--kfold", type=int, default=0,
-                        help="Run k-fold CV (e.g., --kfold 5); skips model export")
+    parser.add_argument("--output", default="data/model.json", help="Output JSON model path")
+    parser.add_argument("--report", default="data/report.json", help="Evaluation report path")
+    parser.add_argument(
+        "--kfold", type=int, default=0, help="Run k-fold CV (e.g., --kfold 5); skips model export"
+    )
     args = parser.parse_args()
 
     X, y, filenames = load_data(args.features)

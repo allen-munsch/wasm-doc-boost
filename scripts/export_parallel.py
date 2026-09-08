@@ -9,6 +9,7 @@ Usage:
     PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 python scripts/export_parallel.py \\
         --images data/images --labels data/labels.csv --output data/features_v3.npz
 """
+
 import argparse
 import csv
 import os
@@ -20,14 +21,23 @@ import time
 
 import numpy as np
 
-LABEL_NAMES = ["is_document", "is_digital", "is_paper", "is_crumpled", "is_shadow",
-                "rotation_0", "rotation_90", "rotation_180", "rotation_270"]
+LABEL_NAMES = [
+    "is_document",
+    "is_digital",
+    "is_paper",
+    "is_crumpled",
+    "is_shadow",
+    "rotation_0",
+    "rotation_90",
+    "rotation_180",
+    "rotation_270",
+]
 
 
 def chunk_list(lst, n):
     """Split list into n roughly equal chunks."""
     k, m = divmod(len(lst), n)
-    return [lst[i*k+min(i,m):(i+1)*k+min(i+1,m)] for i in range(n)]
+    return [lst[i * k + min(i, m) : (i + 1) * k + min(i + 1, m)] for i in range(n)]
 
 
 def main():
@@ -60,10 +70,17 @@ def main():
         chunk_files.append(chunk_file)
 
         proc = subprocess.Popen(
-            [sys.executable, "-u", "scripts/export_worker.py",
-             "--images", args.images,
-             "--labels-csv", args.labels,
-             "--output", chunk_file],
+            [
+                sys.executable,
+                "-u",
+                "scripts/export_worker.py",
+                "--images",
+                args.images,
+                "--labels-csv",
+                args.labels,
+                "--output",
+                chunk_file,
+            ],
             stdin=subprocess.PIPE,
             text=True,
         )
@@ -79,7 +96,7 @@ def main():
         print(f"Worker {i}/{n_workers}: {status}")
 
     t1 = time.time()
-    print(f"All workers done in {t1-t0:.1f}s")
+    print(f"All workers done in {t1 - t0:.1f}s")
 
     # Merge chunks
     print("Merging chunks...")
@@ -108,7 +125,9 @@ def main():
         label_names=np.array(LABEL_NAMES),
     )
     file_size = os.path.getsize(args.output)
-    print(f"Written {args.output}: {features.shape} features, {labels_arr.shape} labels ({file_size/1024:.0f} KB)")
+    print(
+        f"Written {args.output}: {features.shape} features, {labels_arr.shape} labels ({file_size / 1024:.0f} KB)"
+    )
 
     shutil.rmtree(tmpdir, ignore_errors=True)
 

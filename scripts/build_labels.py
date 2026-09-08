@@ -17,10 +17,9 @@ import argparse
 import csv
 import os
 import random
-import sys
 
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFilter
 
 SEED = 42
 LABEL_NAMES = ["is_document", "is_digital", "is_paper", "is_crumpled", "is_shadow"]
@@ -39,8 +38,18 @@ def generate_negatives(out_dir: str, n: int) -> list:
     os.makedirs(out_dir, exist_ok=True)
     random.seed(SEED)
     np.random.seed(SEED)
-    sizes = [(640, 480), (800, 600), (512, 512), (400, 300), (300, 400),
-             (600, 800), (480, 640), (256, 256), (1024, 768), (768, 1024)]
+    sizes = [
+        (640, 480),
+        (800, 600),
+        (512, 512),
+        (400, 300),
+        (300, 400),
+        (600, 800),
+        (480, 640),
+        (256, 256),
+        (1024, 768),
+        (768, 1024),
+    ]
     rows = []
     for i in range(n):
         w, h = sizes[i % len(sizes)]
@@ -120,11 +129,12 @@ def augment_crumple(img: Image.Image) -> Image.Image:
         if random.random() < 0.5:
             x3 = random.randint(0, w)
             y3 = random.randint(0, h)
-            draw.line([(x2, y2), (x3, y3)], fill=128,
-                      width=max(8, thickness - random.randint(5, 20)))
+            draw.line(
+                [(x2, y2), (x3, y3)], fill=128, width=max(8, thickness - random.randint(5, 20))
+            )
 
     # Gaussian blur for smooth falloff (σ=8 for thick lines)
-    from PIL import ImageFilter
+
     mask = mask.filter(ImageFilter.GaussianBlur(radius=8.0))
 
     # Convert mask to float and scale intensity
@@ -133,17 +143,19 @@ def augment_crumple(img: Image.Image) -> Image.Image:
     mask_arr *= darken
 
     # Apply to all channels
-    arr *= (1.0 - np.stack([mask_arr, mask_arr, mask_arr], axis=-1))
+    arr *= 1.0 - np.stack([mask_arr, mask_arr, mask_arr], axis=-1)
     return Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8))
 
 
-def generate_variants(images_dir: str, out_dir: str, ds_name: str,
-                      n_shadow: int, n_crumple: int) -> list:
+def generate_variants(
+    images_dir: str, out_dir: str, ds_name: str, n_shadow: int, n_crumple: int
+) -> list:
     """Generate shadow and crumple variants from existing receipts."""
     os.makedirs(out_dir, exist_ok=True)
     exts = {".png", ".jpg", ".jpeg"}
-    src_files = [f for f in sorted(os.listdir(images_dir))
-                 if os.path.splitext(f)[1].lower() in exts]
+    src_files = [
+        f for f in sorted(os.listdir(images_dir)) if os.path.splitext(f)[1].lower() in exts
+    ]
     if not src_files:
         return []
     random.seed(SEED)
@@ -199,8 +211,7 @@ def main():
             print(f"  SKIP {ds_name}: directory not found")
             continue
         exts = {".png", ".jpg", ".jpeg"}
-        files = sorted(f for f in os.listdir(ds_dir)
-                       if os.path.splitext(f)[1].lower() in exts)
+        files = sorted(f for f in os.listdir(ds_dir) if os.path.splitext(f)[1].lower() in exts)
         for fname in files:
             all_rows.append([f"{ds_name}/{fname}", *label])
         print(f"  {ds_name}: {len(files)} images → {label}")
@@ -213,8 +224,9 @@ def main():
     for ds_name in ["cord-v2", "srd"]:
         ds_dir = os.path.join(images_dir, ds_name)
         if os.path.isdir(ds_dir):
-            var_rows = generate_variants(ds_dir, variants_dir, ds_name,
-                                         args.n_shadow // 2, args.n_crumple // 2)
+            var_rows = generate_variants(
+                ds_dir, variants_dir, ds_name, args.n_shadow // 2, args.n_crumple // 2
+            )
             all_rows.extend(var_rows)
 
     # Shuffle and write
@@ -225,13 +237,13 @@ def main():
         writer.writerow(["filename"] + LABEL_NAMES)
         writer.writerows(all_rows)
 
-    print(f"\n=== labels.csv ===")
+    print("\n=== labels.csv ===")
     print(f"Total: {len(all_rows)} rows")
     arr = np.array([r[1:] for r in all_rows], dtype=np.int8)
     for i, name in enumerate(LABEL_NAMES):
         pos = arr[:, i].sum()
         neg = len(arr) - pos
-        print(f"  {name}: {pos} positive, {neg} negative ({pos/len(arr)*100:.1f}%)")
+        print(f"  {name}: {pos} positive, {neg} negative ({pos / len(arr) * 100:.1f}%)")
     print(f"Written: {csv_path}")
 
 
