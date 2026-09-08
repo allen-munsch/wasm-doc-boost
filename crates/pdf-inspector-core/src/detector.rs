@@ -951,8 +951,8 @@ fn page_has_identity_h_no_tounicode(doc: &Document, page_id: ObjectId) -> bool {
                 has_undecodable_identity_h = true;
             }
             Some(b"Type3") => {
-                // Type3 fonts are handled separately by page_has_only_type3_fonts;
-                // don't count them as decodable here.
+                // Type3 glyphs are custom drawings; without a ToUnicode CMap they
+                // aren't decodable, so don't count them as decodable here.
             }
             _ => {
                 // Type1, TrueType, MMType1, CIDFontType0/2 — these are generally
@@ -1164,8 +1164,8 @@ fn used_fonts_have_identity_h_no_tounicode(
 
 /// Usage-based check: are ALL used fonts Type3 without ToUnicode?
 ///
-/// Unlike `page_has_only_type3_fonts`, this only considers fonts actually referenced
-/// by Tf operators (P1 fix) and includes Form XObject fonts (P2 fix).
+/// Only considers fonts actually referenced by Tf operators (P1 fix) and
+/// includes Form XObject fonts (P2 fix).
 fn used_fonts_are_only_type3(
     used_font_ids: &HashSet<ObjectId>,
     font_map: &HashMap<ObjectId, FontInfo>,

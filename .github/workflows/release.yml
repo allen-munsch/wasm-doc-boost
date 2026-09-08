@@ -64,6 +64,7 @@ jobs:
       - name: Create release and upload wheels
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           gh release create "$GITHUB_REF_NAME" --generate-notes
