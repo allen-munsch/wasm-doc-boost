@@ -1614,23 +1614,7 @@ fn page_number_removal_mask(items: &[TextItem], document_page_count: usize) -> V
         .collect()
 }
 
-/// Return whether selected-page extraction contains a page-edge number whose
-/// folio status depends on evidence from other pages. Isolated and explicitly
-/// labeled folios can be decided locally; only contextual candidates require
-/// a document-wide extraction pass.
-pub(super) fn needs_document_page_number_context(
-    items: &[TextItem],
-    document_page_count: usize,
-) -> bool {
-    let candidate_values: Vec<Option<u32>> = items.iter().map(page_number_value).collect();
-    let (contextual, explicit_folio) =
-        page_number_context_masks(items, &candidate_values, document_page_count);
 
-    candidate_values
-        .iter()
-        .enumerate()
-        .any(|(index, value)| value.is_some() && contextual[index] && !explicit_folio[index])
-}
 
 /// Remove numeric folios using complete document context before downstream
 /// non-table layout partitions could separate the evidence needed to recognize
@@ -1648,6 +1632,7 @@ pub(crate) fn filter_markdown_page_numbers(
 /// The page set lets downstream table-continuation classification preserve its
 /// pre-filter semantics even though structural layout consumes the cleaned
 /// item collection.
+#[cfg(test)]
 pub(crate) fn filter_markdown_page_numbers_with_removed_pages(
     items: Vec<TextItem>,
     document_page_count: u32,
@@ -1901,6 +1886,7 @@ pub(crate) fn group_into_lines_with_thresholds_and_charts(
 /// Partitioned Markdown layout uses this path so a contextual candidate that
 /// was preserved with its complete baseline context is not reconsidered after
 /// its neighboring text lands in another band or chart/prose zone.
+#[cfg(test)]
 pub(crate) fn group_prefiltered_items_into_lines_with_thresholds_and_charts(
     items: Vec<TextItem>,
     page_thresholds: &HashMap<u32, f32>,
@@ -1934,22 +1920,7 @@ pub(crate) fn group_into_lines_with_thresholds_and_regions(
     )
 }
 
-pub(crate) fn group_prefiltered_items_into_lines_with_thresholds_and_regions(
-    items: Vec<TextItem>,
-    page_thresholds: &HashMap<u32, f32>,
-    table_pages: &HashSet<u32>,
-    chart_regions: &HashMap<u32, Vec<(f32, f32, f32, f32)>>,
-    image_regions: &HashMap<u32, Vec<super::reading_order::ImageRegion>>,
-) -> Vec<TextLine> {
-    group_into_lines_with_thresholds_and_regions_impl(
-        items,
-        page_thresholds,
-        table_pages,
-        chart_regions,
-        image_regions,
-        false,
-    )
-}
+
 
 fn group_into_lines_with_thresholds_and_regions_impl(
     items: Vec<TextItem>,
