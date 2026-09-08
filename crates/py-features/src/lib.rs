@@ -1,6 +1,11 @@
 //! # py_features — Rust-powered feature extraction + PDF inspection for Python
 //!
-//! **Install (prebuilt wheel, CPython 3.8+):** `pip install https://github.com/allen-munsch/wasm-doc-boost/releases/download/v0.1.0/py_features-0.1.0-cp38-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl`
+//! **Install (prebuilt wheel, CPython 3.8+):**
+//!
+//! - Linux x86_64: `pip install https://github.com/allen-munsch/wasm-doc-boost/releases/download/v0.1.0/py_features-0.1.0-cp38-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl`
+//! - Linux aarch64: `pip install https://github.com/allen-munsch/wasm-doc-boost/releases/download/v0.1.0/py_features-0.1.0-cp38-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl`
+//! - macOS Intel (x86_64): `pip install https://github.com/allen-munsch/wasm-doc-boost/releases/download/v0.1.0/py_features-0.1.0-cp38-abi3-macosx_10_12_x86_64.whl`
+//! - macOS Apple Silicon (arm64): `pip install https://github.com/allen-munsch/wasm-doc-boost/releases/download/v0.1.0/py_features-0.1.0-cp38-abi3-macosx_11_0_arm64.whl`
 //!
 //! **From source (requires Rust):** `cd crates/py-features && pip install maturin && maturin develop --release`
 //!
