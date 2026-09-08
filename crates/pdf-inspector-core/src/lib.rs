@@ -33,7 +33,6 @@ pub mod detector;
 pub mod extractor;
 pub mod glyph_names;
 pub mod process_mode;
-mod text_quality;
 pub mod text_utils;
 pub mod tounicode;
 pub mod types;
@@ -52,42 +51,8 @@ pub use types::{PdfLine, PdfRect, TextItem};
 use lopdf::Document;
 use log::debug;
 use std::borrow::Cow;
-use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
-#[cfg(not(target_arch = "wasm32"))]
-struct ProcessingTimer(std::time::Instant);
-
-#[cfg(target_arch = "wasm32")]
-struct ProcessingTimer;
-
-impl ProcessingTimer {
-    fn start() -> Self {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            Self(std::time::Instant::now())
-        }
-
-        #[cfg(target_arch = "wasm32")]
-        {
-            Self
-        }
-    }
-
-    fn elapsed_ms(&self) -> u64 {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            self.0.elapsed().as_millis() as u64
-        }
-
-        #[cfg(target_arch = "wasm32")]
-        {
-            // The wasm32-unknown-unknown standard library has no clock.
-            // Browser bindings measure with JavaScript's host clock.
-            0
-        }
-    }
-}
 
 /// OCR reason emitted when the extracted text layer appears garbled due to
 /// broken font decoding or mojibake.
@@ -105,22 +70,6 @@ pub const OCR_REASON_NO_TEXT: &str = "no_text";
 /// rather than real text operators, so it cannot be extracted as characters.
 pub const OCR_REASON_VECTOR_TEXT: &str = "vector_text";
 
-// =============================================================================
-// PageOcrReasons
-// =============================================================================
-
-// =========================================================================
-// Result type
-// =========================================================================
-
-/// OCR reasons for a single 1-indexed page.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PageOcrReasons {
-    /// 1-indexed page number.
-    pub page: u32,
-    /// Machine-readable OCR reason identifiers.
-    pub reasons: Vec<String>,
-}
 
 
 // =============================================================================
@@ -557,49 +506,6 @@ fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
     find_bytes(haystack, needle).is_some()
 }
 
-// =============================================================================
-// OCR reason helpers
-// =============================================================================
-
-fn suspected_garbled_reason() -> String {
-    OCR_REASON_SUSPECTED_GARBLED_TEXT.to_string()
-}
-
-pub(crate) fn add_ocr_reason(
-    reasons_by_page: &mut BTreeMap<u32, Vec<String>>,
-    page: u32,
-    reason: &str,
-) {
-    let reasons = reasons_by_page.entry(page).or_default();
-    if !reasons.iter().any(|existing| existing == reason) {
-        reasons.push(reason.to_string());
-    }
-}
-
-fn merge_ocr_reasons(
-    reasons_by_page: &mut BTreeMap<u32, Vec<String>>,
-    extra_reasons_by_page: BTreeMap<u32, Vec<String>>,
-) {
-    for (page, reasons) in extra_reasons_by_page {
-        for reason in reasons {
-            add_ocr_reason(reasons_by_page, page, &reason);
-        }
-    }
-}
-
-fn page_ocr_reason(reasons_by_page: &BTreeMap<u32, Vec<String>>, page: u32) -> Option<String> {
-    reasons_by_page
-        .get(&page)
-        .and_then(|reasons| reasons.first())
-        .cloned()
-}
-
-fn page_ocr_reasons_vec(reasons_by_page: BTreeMap<u32, Vec<String>>) -> Vec<PageOcrReasons> {
-    reasons_by_page
-        .into_iter()
-        .map(|(page, reasons)| PageOcrReasons { page, reasons })
-        .collect()
-}
 
 /// Detect markdown tables with suspicious structure that suggest the heuristic
 /// missed/mangled rows or columns. Returns true when the caller should treat

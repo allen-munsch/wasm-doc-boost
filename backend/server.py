@@ -10,14 +10,19 @@ First run will download the model (~2GB) from HuggingFace.
 GPU recommended — CPU inference is extremely slow.
 """
 
+from glmocr.layout import PPDocLayoutDetector
+from glmocr.config import load_config as glmocr_load_config
+import uvicorn
+
+
 import argparse
 import base64
 import io
 import json
-import os
 import re
 import time
 from contextlib import asynccontextmanager
+from typing import Any, cast
 
 import torch
 from fastapi import FastAPI, HTTPException, Request
@@ -28,9 +33,9 @@ from transformers import AutoProcessor, GlmOcrForConditionalGeneration
 MODEL_ID = "zai-org/GLM-OCR"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-model = None
-processor = None
-layout_detector = None
+model: Any = None
+processor: Any = None
+layout_detector: Any = None
 
 
 @asynccontextmanager
@@ -38,16 +43,14 @@ async def lifespan(app: FastAPI):
     global model, processor, layout_detector
     print(f"[glm-ocr] Loading {MODEL_ID} on {DEVICE}...")
     t0 = time.time()
-    model = GlmOcrForConditionalGeneration.from_pretrained(
+    model = cast(Any, GlmOcrForConditionalGeneration.from_pretrained(
         MODEL_ID, torch_dtype=torch.bfloat16 if DEVICE == "cuda" else torch.float32
-    ).to(DEVICE).eval()
+    )).to(DEVICE).eval()
     processor = AutoProcessor.from_pretrained(MODEL_ID, trust_remote_code=True)
     print(f"[glm-ocr] Ready in {time.time() - t0:.1f}s")
 
     # Init layout detector on CPU (GPU is for the OCR model)
     print("[glm-ocr] Loading PP-DocLayoutV3 layout detector on CPU...")
-    from glmocr.layout import PPDocLayoutDetector
-    from glmocr.config import load_config as glmocr_load_config
     glm_cfg = glmocr_load_config()
     layout_cfg = glm_cfg.pipeline.layout
     layout_cfg.device = "cpu"
@@ -128,7 +131,7 @@ def _run_ocr(pil_image: Image.Image, prompt: str, max_tokens: int = 512) -> str:
 
     prompt_len = inputs["input_ids"].shape[-1]
     new_ids = generated[0, prompt_len:]
-    return processor.tokenizer.decode(new_ids, skip_special_tokens=True).strip()
+    return cast(str, processor.tokenizer.decode(new_ids, skip_special_tokens=True).strip())
 
 
 @app.get("/health")
@@ -183,6 +186,7 @@ async def ocr(request: Request):
     elapsed = time.time() - t0
 
     # If regions mode, wrap in top-level dict for meta
+    result: Any
     if isinstance(parsed, list):
         result = {"regions": parsed}
     else:
@@ -196,7 +200,6 @@ async def ocr(request: Request):
 
 
 if __name__ == "__main__":
-    import uvicorn
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=8765)

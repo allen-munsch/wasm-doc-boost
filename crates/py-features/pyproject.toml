@@ -8,5 +8,5 @@ version = "0.1.0"
 requires-python = ">=3.8"
 
 [tool.maturin]
-features = ["pyo3/extension-module"]
+features = ["pyo3/extension-module", "pyo3/abi3-py38"]
 module-name = "py_features"

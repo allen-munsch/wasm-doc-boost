@@ -49,8 +49,14 @@ const result = classify_file(fileBytes);
 ### Python
 
 ```bash
-cd crates/py-features
-PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 pip install -e . --no-build-isolation
+# Prebuilt wheel (CPython 3.8+), no Rust toolchain required.
+# x86_64:
+pip install https://github.com/allen-munsch/wasm-doc-boost/releases/download/v0.1.0/py_features-0.1.0-cp38-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
+# aarch64:
+pip install https://github.com/allen-munsch/wasm-doc-boost/releases/download/v0.1.0/py_features-0.1.0-cp38-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl
+
+# Or build from source:
+cd crates/py-features && maturin develop --release
 ```
 
 ```python

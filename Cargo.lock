@@ -787,6 +787,7 @@ name = "py-features"
 version = "0.1.0"
 dependencies = [
  "features-core",
+ "pdf-inspector-core",
  "pyo3",
 ]
 

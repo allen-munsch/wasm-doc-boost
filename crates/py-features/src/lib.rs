@@ -1,8 +1,8 @@
 //! # py_features — Rust-powered feature extraction + PDF inspection for Python
 //!
-//! **Install:** `cd crates/py-features && pip install maturin && maturin develop --release`
+//! **Install (prebuilt wheel, CPython 3.8+):** `pip install https://github.com/allen-munsch/wasm-doc-boost/releases/download/v0.1.0/py_features-0.1.0-cp38-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl`
 //!
-//! **Requires:** Rust toolchain, Python >= 3.8.
+//! **From source (requires Rust):** `cd crates/py-features && pip install maturin && maturin develop --release`
 //!
 //! ## Python API
 //!
@@ -163,7 +163,16 @@ fn extract_text_with_positions(data: Vec<u8>) -> PyResult<PyObject> {
     })
 }
 
-/// `py_features` — 3 functions, zero config.
+// ── is_release_build ─────────────────────────────────────────────────────
+
+/// Check if this Rust binary was built in optimized release mode.
+/// Returns true if release, false if debug (compiled with debug assertions).
+#[pyfunction]
+fn is_release_build() -> bool {
+    cfg!(not(debug_assertions))
+}
+
+/// `py_features` — 4 functions, zero config.
 ///
 /// ```python
 /// import py_features
@@ -171,11 +180,13 @@ fn extract_text_with_positions(data: Vec<u8>) -> PyResult<PyObject> {
 /// feats = py_features.extract_all(raw_rgb_bytes, width, height)
 /// result = py_features.classify_pdf(pdf_bytes)
 /// items = py_features.extract_text_with_positions(pdf_bytes)
+/// is_rel = py_features.is_release_build()
 /// ```
 #[pymodule]
 fn py_features(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(extract_all, m)?)?;
     m.add_function(wrap_pyfunction!(classify_pdf, m)?)?;
     m.add_function(wrap_pyfunction!(extract_text_with_positions, m)?)?;
+    m.add_function(wrap_pyfunction!(is_release_build, m)?)?;
     Ok(())
 }

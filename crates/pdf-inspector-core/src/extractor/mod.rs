@@ -27,15 +27,10 @@ use links::{extract_form_fields, extract_page_links};
 pub use crate::text_utils::{is_bold_font, is_italic_font};
 pub use crate::types::{ItemType, TextLine};
 pub(crate) use fonts::FontStyleCache;
-pub(crate) use layout::detect_columns;
 #[cfg(test)]
 use layout::filter_markdown_page_numbers;
-pub(crate) use layout::filter_markdown_page_numbers_with_removed_pages;
-pub(crate) use layout::group_into_lines_with_thresholds;
-pub(crate) use layout::group_prefiltered_items_into_lines_with_thresholds_and_charts;
-pub(crate) use layout::group_prefiltered_items_into_lines_with_thresholds_and_regions;
-pub(crate) use layout::is_newspaper_layout;
-pub(crate) use layout::ColumnRegion;
+#[cfg(test)]
+use layout::group_prefiltered_items_into_lines_with_thresholds_and_charts;
 pub use layout::{group_into_lines, group_into_lines_preserving_all_text};
 
 // ---------------------------------------------------------------------------
@@ -163,90 +158,6 @@ pub(crate) fn extract_positioned_text_from_doc(
     extract_positioned_text_impl(doc, font_cmaps, page_filter, false, None)
 }
 
-/// Extract selected pages and gather document-wide folio evidence only when a
-/// selected page contains an ambiguous contextual page-edge number. Errors on
-/// selected pages remain fatal; errors on context-only pages are skipped.
-pub(crate) fn extract_positioned_text_with_folio_context(
-    doc: &Document,
-    font_cmaps: &FontCMaps,
-    page_filter: Option<&HashSet<u32>>,
-) -> Result<(PageExtraction, PageThresholds, HashSet<u32>), PdfError> {
-    extract_positioned_text_with_folio_context_impl(doc, font_cmaps, page_filter, false)
-}
-
-/// Invisible-text variant of [`extract_positioned_text_with_folio_context`].
-pub(crate) fn extract_positioned_text_include_invisible_with_folio_context(
-    doc: &Document,
-    font_cmaps: &FontCMaps,
-    page_filter: Option<&HashSet<u32>>,
-) -> Result<(PageExtraction, PageThresholds, HashSet<u32>), PdfError> {
-    extract_positioned_text_with_folio_context_impl(doc, font_cmaps, page_filter, true)
-}
-
-fn extract_positioned_text_with_folio_context_impl(
-    doc: &Document,
-    font_cmaps: &FontCMaps,
-    page_filter: Option<&HashSet<u32>>,
-    include_invisible: bool,
-) -> Result<(PageExtraction, PageThresholds, HashSet<u32>), PdfError> {
-    let Some(required_pages) = page_filter else {
-        return extract_positioned_text_impl(doc, font_cmaps, None, include_invisible, None);
-    };
-
-    let (
-        (mut selected_items, mut selected_rects, mut selected_lines),
-        mut page_thresholds,
-        mut gid_encoded_pages,
-    ) = extract_positioned_text_impl(
-        doc,
-        font_cmaps,
-        Some(required_pages),
-        include_invisible,
-        None,
-    )?;
-    if !layout::needs_document_page_number_context(&selected_items, doc.get_pages().len()) {
-        return Ok((
-            (selected_items, selected_rects, selected_lines),
-            page_thresholds,
-            gid_encoded_pages,
-        ));
-    }
-
-    let context_pages: HashSet<u32> = doc
-        .get_pages()
-        .keys()
-        .copied()
-        .filter(|page| !required_pages.contains(page))
-        .collect();
-    let ((context_items, context_rects, context_lines), context_thresholds, context_gid_pages) =
-        extract_positioned_text_impl(
-            doc,
-            font_cmaps,
-            Some(&context_pages),
-            include_invisible,
-            Some(required_pages),
-        )?;
-    selected_items.extend(context_items);
-    selected_rects.extend(context_rects);
-    selected_lines.extend(context_lines);
-    page_thresholds.extend(context_thresholds);
-    gid_encoded_pages.extend(context_gid_pages);
-    Ok((
-        (selected_items, selected_rects, selected_lines),
-        page_thresholds,
-        gid_encoded_pages,
-    ))
-}
-
-/// Extract all pages for document-wide analysis while allowing malformed
-/// unselected pages to be skipped. Any requested page still fails normally.
-pub(crate) fn extract_positioned_text_for_document_analysis(
-    doc: &Document,
-    font_cmaps: &FontCMaps,
-    required_pages: &HashSet<u32>,
-) -> Result<(PageExtraction, PageThresholds, HashSet<u32>), PdfError> {
-    extract_positioned_text_impl(doc, font_cmaps, None, false, Some(required_pages))
-}
 
 fn extract_positioned_text_impl(
     doc: &Document,

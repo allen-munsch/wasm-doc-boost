@@ -57,32 +57,6 @@ pub(crate) fn is_explicit_page_number_expression(text: &str) -> bool {
     }
 }
 
-/// Return whether a completed Markdown line looks like a page number or a
-/// labeled running header.
-///
-/// At this stage the complete line and surrounding breaks are available, so a
-/// leading `Page N` remains compatible with the existing header cleanup even
-/// when the PDF appends a chapter or document title.
-pub(crate) fn is_page_number_line(text: &str) -> bool {
-    if is_explicit_page_number_expression(text) {
-        return true;
-    }
-
-    let lowercase = text.trim().to_ascii_lowercase();
-    lowercase.strip_prefix("page").is_some_and(|rest| {
-        let mut characters = rest.trim_start().chars().peekable();
-        let mut has_page_number = false;
-        while characters
-            .peek()
-            .is_some_and(|character| character.is_ascii_digit())
-        {
-            has_page_number = true;
-            characters.next();
-        }
-
-        has_page_number && characters.next().is_none_or(char::is_whitespace)
-    })
-}
 
 /// Check if a character is CJK (Chinese, Japanese, Korean).
 /// CJK languages don't use spaces between words, so word-boundary

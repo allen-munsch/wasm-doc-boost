@@ -14,18 +14,26 @@ Output: .npz with features (N*4, 103), labels (N*4, 9), filenames (N*4,).
 
 import argparse
 import csv
+import multiprocessing as mp
 import os
 import sys
-import multiprocessing as mp
 from concurrent.futures import ProcessPoolExecutor
 
 import numpy as np
+import py_features
 from PIL import Image
 
-import py_features
-
-LABEL_NAMES = ["is_document", "is_digital", "is_paper", "is_crumpled", "is_shadow",
-                "rotation_0", "rotation_90", "rotation_180", "rotation_270"]
+LABEL_NAMES = [
+    "is_document",
+    "is_digital",
+    "is_paper",
+    "is_crumpled",
+    "is_shadow",
+    "rotation_0",
+    "rotation_90",
+    "rotation_180",
+    "rotation_270",
+]
 CSV_LABEL_NAMES = ["is_document", "is_digital", "is_paper", "is_crumpled", "is_shadow"]
 ROTATION_ANGLES = [0, 90, 180, 270]
 MAX_LONG_EDGE = 512

@@ -4,6 +4,7 @@
 import sys
 from pathlib import Path
 
+import uvicorn
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from starlette.requests import Request
@@ -47,5 +48,4 @@ async def serve(full_path: str):
 
 
 if __name__ == "__main__":
-    import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=PORT, log_level="info")

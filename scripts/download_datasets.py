@@ -22,13 +22,13 @@ import json
 import os
 import random
 import subprocess
-import sys
 import tarfile
 import zipfile
 from pathlib import Path
 from urllib.request import Request, urlopen
 
 import numpy as np
+import pandas as pd
 from PIL import Image
 
 SEED = 42
@@ -103,6 +103,7 @@ DATASETS = {
 
 # ── Downloaders ───────────────────────────────────────────────────────────
 
+
 def download_gdown(url: str, dest: str) -> None:
     if os.path.exists(dest):
         print(f"  Already exists: {dest}")
@@ -140,6 +141,7 @@ def download_url_raw(url: str, dest: str) -> None:
 
 # ── Extractors ────────────────────────────────────────────────────────────
 
+
 def extract_zip(path: str, dest_dir: str) -> None:
     done_marker = os.path.join(dest_dir, ".extracted")
     if os.path.exists(done_marker):
@@ -166,6 +168,7 @@ def extract_tar(path: str, dest_dir: str) -> None:
 
 # ── Helpers ───────────────────────────────────────────────────────────────
 
+
 def find_images(base_dir: str) -> list[str]:
     exts = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp"}
     results = []
@@ -176,8 +179,9 @@ def find_images(base_dir: str) -> list[str]:
     return results
 
 
-def copy_images(src_dir: str, out_dir: str, ds_name: str, max_images: int | None,
-                label: tuple) -> list:
+def copy_images(
+    src_dir: str, out_dir: str, ds_name: str, max_images: int | None, label: tuple
+) -> list:
     """Find images under src_dir, optionally subset, copy to out_dir, return CSV rows."""
     os.makedirs(out_dir, exist_ok=True)
     img_paths = find_images(src_dir)
@@ -208,6 +212,7 @@ def copy_images(src_dir: str, out_dir: str, ds_name: str, max_images: int | None
 
 
 # ── HF dataset handlers ───────────────────────────────────────────────────
+
 
 def download_hf_zip(dataset_id: str, hf_path: str, raw_dir: str) -> str:
     """Download a zip file from a HuggingFace dataset repo."""
@@ -240,7 +245,7 @@ def process_coru(raw_dir: str, out_dir: str, cfg: dict) -> list:
 def process_cordv2(raw_dir: str, out_dir: str, cfg: dict) -> list:
     """CORD-v2: download parquet files from HF, extract images via pillow."""
     try:
-        import pandas as pd
+        pass
     except ImportError:
         raise RuntimeError("pandas is required for CORD-v2. Install: pip install pandas pyarrow")
 
@@ -275,6 +280,7 @@ def process_cordv2(raw_dir: str, out_dir: str, cfg: dict) -> list:
 
 # ── Per-dataset processor ─────────────────────────────────────────────────
 
+
 def process_dataset(ds_name: str, cfg: dict, raw_dir: str, out_dir: str) -> list:
     print(f"\n── {ds_name} ──")
 
@@ -307,15 +313,15 @@ def process_dataset(ds_name: str, cfg: dict, raw_dir: str, out_dir: str) -> list
 
 # ── Main ──────────────────────────────────────────────────────────────────
 
+
 def main():
     parser = argparse.ArgumentParser(description="Download training datasets")
     parser.add_argument("--data-dir", default="data", help="Base data directory")
-    parser.add_argument("--skip", action="append", default=[],
-                        help="Datasets to skip")
-    parser.add_argument("--only", action="append", default=None,
-                        help="Only process these datasets")
-    parser.add_argument("--continue-on-error", action="store_true",
-                        help="Don't abort on first download failure")
+    parser.add_argument("--skip", action="append", default=[], help="Datasets to skip")
+    parser.add_argument("--only", action="append", default=None, help="Only process these datasets")
+    parser.add_argument(
+        "--continue-on-error", action="store_true", help="Don't abort on first download failure"
+    )
     args = parser.parse_args()
 
     data_dir = args.data_dir
@@ -357,15 +363,17 @@ def main():
         writer.writerow(["filename"] + LABEL_NAMES)
         writer.writerows(all_rows)
 
-    print(f"\n=== Done ===")
+    print("\n=== Done ===")
     print(f"Total images: {len(all_rows)}")
     if all_rows:
         arr = np.array([r[1:] for r in all_rows], dtype=np.int8)
         for i, name in enumerate(LABEL_NAMES):
             print(f"  {name}: {arr[:, i].sum()} positive, {len(arr) - arr[:, i].sum()} negative")
     print(f"Labels: {csv_path}")
-    print(f"\nNext: python scripts/export_features.py --images {out_dir}/ "
-          f"--labels {csv_path} --output {data_dir}/features.npz")
+    print(
+        f"\nNext: python scripts/export_features.py --images {out_dir}/ "
+        f"--labels {csv_path} --output {data_dir}/features.npz"
+    )
 
 
 if __name__ == "__main__":

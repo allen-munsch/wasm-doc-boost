@@ -1,16 +1,27 @@
 #!/usr/bin/env python3
 """Worker subprocess for feature extraction. Reads image list from stdin, writes .npz to --output."""
+
 import argparse
 import csv
 import os
 import sys
-import numpy as np
-from PIL import Image
-import py_features
 
-LABEL_NAMES = ["is_document", "is_digital", "is_paper", "is_crumpled", "is_shadow",
-                "rotation_0", "rotation_90", "rotation_180", "rotation_270"]
-CSV_LABEL_NAMES = ["is_document","is_digital","is_paper","is_crumpled","is_shadow"]
+import numpy as np
+import py_features
+from PIL import Image
+
+LABEL_NAMES = [
+    "is_document",
+    "is_digital",
+    "is_paper",
+    "is_crumpled",
+    "is_shadow",
+    "rotation_0",
+    "rotation_90",
+    "rotation_180",
+    "rotation_270",
+]
+CSV_LABEL_NAMES = ["is_document", "is_digital", "is_paper", "is_crumpled", "is_shadow"]
 ROTATION_ANGLES = [0, 90, 180, 270]
 MAX_LONG_EDGE = 512
 
@@ -80,7 +91,7 @@ def main():
             label_list.extend(lbls)
             filename_list.extend(fnames)
         if (i + 1) % 500 == 0:
-            print(f"  [{os.getpid()}] {i+1}/{len(filenames)}", file=sys.stderr, flush=True)
+            print(f"  [{os.getpid()}] {i + 1}/{len(filenames)}", file=sys.stderr, flush=True)
 
     if not feature_list:
         print(f"Worker {os.getpid()}: no features extracted ({errors} errors)", file=sys.stderr)
@@ -95,8 +106,11 @@ def main():
         labels=labels_arr,
         filenames=np.array(filename_list),
     )
-    print(f"Worker {os.getpid()}: wrote {args.output} ({features.shape[0]} samples, {errors} errors)",
-          file=sys.stderr, flush=True)
+    print(
+        f"Worker {os.getpid()}: wrote {args.output} ({features.shape[0]} samples, {errors} errors)",
+        file=sys.stderr,
+        flush=True,
+    )
 
 
 if __name__ == "__main__":
