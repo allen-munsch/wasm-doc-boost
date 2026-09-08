@@ -50,10 +50,14 @@ const result = classify_file(fileBytes);
 
 ```bash
 # Prebuilt wheel (CPython 3.8+), no Rust toolchain required.
-# x86_64:
+# Linux x86_64:
 pip install https://github.com/allen-munsch/wasm-doc-boost/releases/download/v0.1.0/py_features-0.1.0-cp38-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
-# aarch64:
+# Linux aarch64:
 pip install https://github.com/allen-munsch/wasm-doc-boost/releases/download/v0.1.0/py_features-0.1.0-cp38-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl
+# macOS Intel (x86_64):
+pip install https://github.com/allen-munsch/wasm-doc-boost/releases/download/v0.1.0/py_features-0.1.0-cp38-abi3-macosx_10_12_x86_64.whl
+# macOS Apple Silicon (arm64):
+pip install https://github.com/allen-munsch/wasm-doc-boost/releases/download/v0.1.0/py_features-0.1.0-cp38-abi3-macosx_11_0_arm64.whl
 
 # Or build from source:
 cd crates/py-features && maturin develop --release
