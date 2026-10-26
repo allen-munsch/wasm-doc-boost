@@ -317,7 +317,7 @@ fn build_tree(flat: &mut Vec<Node>, raw_nodes: &[RawNode], idx: usize) {
                 threshold: split.split_condition,
             };
 
-            if split.children.len() >= 1 {
+            if !split.children.is_empty() {
                 build_tree(flat, &[split.children[0].clone()], 2 * idx + 1);
             }
             if split.children.len() >= 2 {

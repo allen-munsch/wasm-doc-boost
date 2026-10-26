@@ -130,7 +130,9 @@ def augment_crumple(img: Image.Image) -> Image.Image:
             x3 = random.randint(0, w)
             y3 = random.randint(0, h)
             draw.line(
-                [(x2, y2), (x3, y3)], fill=128, width=max(8, thickness - random.randint(5, 20))
+                [(x2, y2), (x3, y3)],
+                fill=128,
+                width=max(8, thickness - random.randint(5, 20)),
             )
 
     # Gaussian blur for smooth falloff (σ=8 for thick lines)
@@ -154,7 +156,9 @@ def generate_variants(
     os.makedirs(out_dir, exist_ok=True)
     exts = {".png", ".jpg", ".jpeg"}
     src_files = [
-        f for f in sorted(os.listdir(images_dir)) if os.path.splitext(f)[1].lower() in exts
+        f
+        for f in sorted(os.listdir(images_dir))
+        if os.path.splitext(f)[1].lower() in exts
     ]
     if not src_files:
         return []
@@ -174,7 +178,8 @@ def generate_variants(
                     img = Image.open(src).convert("RGB")
                     img = fn_aug(img)
                     img.save(dest)
-                except Exception:
+                except (OSError, ValueError):
+                    print(f"    skipping unreadable source image: {src}")
                     continue
             # is_document=1, is_paper=1, plus shadow/crumple flag
             label = [1, 0, 1, 0, 0]
@@ -211,7 +216,9 @@ def main():
             print(f"  SKIP {ds_name}: directory not found")
             continue
         exts = {".png", ".jpg", ".jpeg"}
-        files = sorted(f for f in os.listdir(ds_dir) if os.path.splitext(f)[1].lower() in exts)
+        files = sorted(
+            f for f in os.listdir(ds_dir) if os.path.splitext(f)[1].lower() in exts
+        )
         for fname in files:
             all_rows.append([f"{ds_name}/{fname}", *label])
         print(f"  {ds_name}: {len(files)} images → {label}")

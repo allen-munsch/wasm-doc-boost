@@ -171,7 +171,7 @@ mod tests {
         let mut pixels = vec![];
         for y in 0..h {
             for x in 0..w {
-                if x >= 20 && x < 60 && y >= 20 && y < 60 {
+                if (20..60).contains(&x) && (20..60).contains(&y) {
                     pixels.push(0.0);
                 } else {
                     pixels.push(255.0);

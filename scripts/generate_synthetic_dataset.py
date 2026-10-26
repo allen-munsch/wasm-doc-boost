@@ -64,7 +64,10 @@ def generate_digital(outdir, n=60):
         if random.random() < 0.3:
             box_color = tuple(np.random.randint(100, 200, 3).tolist())
             x0, y0 = random.randint(10, w // 3), random.randint(10, h // 3)
-            x1, y1 = random.randint(2 * w // 3, w - 10), random.randint(2 * h // 3, h - 10)
+            x1, y1 = (
+                random.randint(2 * w // 3, w - 10),
+                random.randint(2 * h // 3, h - 10),
+            )
             draw.rectangle([x0, y0, x1, y1], outline=box_color, width=2)
 
         fname = f"digital_{i:04d}.png"
@@ -98,7 +101,9 @@ def generate_paper(outdir, n=60):
 
         # Slight rotation via skew (optional)
         if random.random() < 0.2:
-            img = img.rotate(random.uniform(-2, 2), expand=False, fillcolor=tuple(base.tolist()))
+            img = img.rotate(
+                random.uniform(-2, 2), expand=False, fillcolor=tuple(base.tolist())
+            )
 
         fname = f"paper_{i:04d}.png"
         img.save(os.path.join(outdir, fname))
@@ -135,7 +140,9 @@ def generate_crumpled(outdir, n=30):
                 if 0 <= px < w and 0 <= py < h:
                     dist = abs(t) / length
                     fade = np.exp(-dist * 3) * darken
-                    arr[py, px] = np.clip(arr[py, px] * (1 - fade), 0, 255).astype(np.uint8)
+                    arr[py, px] = np.clip(arr[py, px] * (1 - fade), 0, 255).astype(
+                        np.uint8
+                    )
 
         img = Image.fromarray(arr)
         draw = ImageDraw.Draw(img)
@@ -265,7 +272,9 @@ def main():
     print("Class distribution:")
     arr = np.array([r[1:] for r in all_rows], dtype=np.int8)
     for i, name in enumerate(LABEL_NAMES):
-        print(f"  {name}: {arr[:, i].sum()} positive, {len(arr) - arr[:, i].sum()} negative")
+        print(
+            f"  {name}: {arr[:, i].sum()} positive, {len(arr) - arr[:, i].sum()} negative"
+        )
 
 
 if __name__ == "__main__":

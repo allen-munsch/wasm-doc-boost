@@ -10,13 +10,12 @@ Usage:
 """
 
 import argparse
-import math
 import os
+from multiprocessing import Pool
 
 import numpy as np
 import py_features
 from PIL import Image
-from multiprocessing import Pool
 
 MAX_LONG_EDGE = 512
 BORDER_FILL_WIDTH = 4
@@ -46,7 +45,7 @@ def sweep_one(args):
         rgb = np.frombuffer(pixels, dtype=np.uint8).reshape(rh, rw, 3)
         img = Image.fromarray(rgb, "RGB")
         fill = median_border_color(img)
-    except Exception as e:
+    except (OSError, ValueError, RuntimeError) as e:
         return fname, None, str(e)
 
     feats_list, angle_list = [], []
@@ -54,15 +53,20 @@ def sweep_one(args):
         if angle == 0:
             rotated = img
         else:
-            rotated = img.rotate(angle, expand=True, resample=Image.BICUBIC, fillcolor=fill)
+            rotated = img.rotate(
+                angle, expand=True, resample=Image.BICUBIC, fillcolor=fill
+            )
         rw, rh = rotated.size
         pixels = np.array(rotated, dtype=np.uint8).tobytes()
         feats = py_features.extract_all_v2(pixels, rw, rh)
         assert len(feats) == V2_FEAT_COUNT, f"{fname}: {len(feats)} feats"
         feats_list.append(feats)
         angle_list.append(angle)
-    return fname, (np.array(feats_list, dtype=np.float64),
-                   np.array(angle_list, dtype=np.int32)), None
+    return (
+        fname,
+        (np.array(feats_list, dtype=np.float64), np.array(angle_list, dtype=np.int32)),
+        None,
+    )
 
 
 def main():
@@ -92,11 +96,15 @@ def main():
 
     F = np.vstack(all_feats)
     A = np.concatenate(all_angles)
-    np.savez_compressed(args.output, features=F, angles=A,
-                        filenames=np.array(all_fnames))
-    print(f"Wrote {args.output}: {F.shape}, axis span "
-          f"{np.degrees(F[:, RADON_AXIS_INDEX]).min():.1f}.."
-          f"{np.degrees(F[:, RADON_AXIS_INDEX]).max():.1f} deg", flush=True)
+    np.savez_compressed(
+        args.output, features=F, angles=A, filenames=np.array(all_fnames)
+    )
+    print(
+        f"Wrote {args.output}: {F.shape}, axis span "
+        f"{np.degrees(F[:, RADON_AXIS_INDEX]).min():.1f}.."
+        f"{np.degrees(F[:, RADON_AXIS_INDEX]).max():.1f} deg",
+        flush=True,
+    )
 
 
 if __name__ == "__main__":

@@ -220,7 +220,7 @@ where
     }
 
     // 2. rewrite from the end, so the offsets ahead of each edit stay valid
-    kept.sort_by(|a, b| b.char_start.cmp(&a.char_start));
+    kept.sort_by_key(|e| std::cmp::Reverse(e.char_start));
     let mut out = text.to_string();
     for e in kept {
         out.replace_range(e.char_start..e.char_end, &placeholder(&e.label));

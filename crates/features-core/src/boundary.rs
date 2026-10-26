@@ -82,7 +82,7 @@ fn median_border_color(pixels: &[u8], width: usize, height: usize) -> (u8, u8, u
             push(x, y);
         }
     }
-    for y in (height - t.min(height)).max(0)..height {
+    for y in (height - t.min(height))..height {
         for x in 0..width {
             push(x, y);
         }
@@ -91,7 +91,7 @@ fn median_border_color(pixels: &[u8], width: usize, height: usize) -> (u8, u8, u
         for x in 0..t.min(width) {
             push(x, y);
         }
-        for x in (width - t.min(width)).max(0)..width {
+        for x in (width - t.min(width))..width {
             push(x, y);
         }
     }
@@ -124,7 +124,7 @@ fn median_u8(values: &[u8]) -> u8 {
     for &v in values {
         hist[v as usize] += 1;
     }
-    let half = (values.len() + 1) / 2;
+    let half = values.len().div_ceil(2);
     let mut acc = 0u32;
     for (i, &c) in hist.iter().enumerate() {
         acc += c;

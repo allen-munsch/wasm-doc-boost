@@ -240,16 +240,16 @@ pub fn otsu_threshold(values: &[f64]) -> f64 {
 
     let total = values.len() as f64;
     let mut sum = 0.0;
-    for i in 0..n_bins {
-        sum += (min_val + (i as f64 + 0.5) * bin_width) * hist[i] as f64;
+    for (i, &h) in hist.iter().enumerate().take(n_bins) {
+        sum += (min_val + (i as f64 + 0.5) * bin_width) * h as f64;
     }
 
     let mut best_thresh = min_val;
     let mut best_variance = 0.0;
     let mut w_b = 0.0;
     let mut sum_b = 0.0;
-    for i in 0..n_bins {
-        w_b += hist[i] as f64;
+    for (i, &h) in hist.iter().enumerate().take(n_bins) {
+        w_b += h as f64;
         if w_b < 1.0 {
             continue;
         }
@@ -257,7 +257,7 @@ pub fn otsu_threshold(values: &[f64]) -> f64 {
         if w_f < 1.0 {
             break;
         }
-        sum_b += (min_val + (i as f64 + 0.5) * bin_width) * hist[i] as f64;
+        sum_b += (min_val + (i as f64 + 0.5) * bin_width) * h as f64;
         let m_b = sum_b / w_b;
         let m_f = (sum - sum_b) / w_f;
         let between = w_b * w_f * (m_b - m_f) * (m_b - m_f);

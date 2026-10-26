@@ -225,11 +225,11 @@ pub fn laplacian_variance(gray: &[f64], width: usize, height: usize) -> f64 {
 
     for y in 0..height as isize {
         for x in 0..width as isize {
-            let lap = pixel_at(&gray, width, height, x, y) * 4.0
-                - pixel_at(&gray, width, height, x - 1, y)
-                - pixel_at(&gray, width, height, x + 1, y)
-                - pixel_at(&gray, width, height, x, y - 1)
-                - pixel_at(&gray, width, height, x, y + 1);
+            let lap = pixel_at(gray, width, height, x, y) * 4.0
+                - pixel_at(gray, width, height, x - 1, y)
+                - pixel_at(gray, width, height, x + 1, y)
+                - pixel_at(gray, width, height, x, y - 1)
+                - pixel_at(gray, width, height, x, y + 1);
 
             let i = (y as usize * width + x as usize) as f64;
             let delta = lap - sum;
@@ -475,16 +475,16 @@ fn otsu_threshold(values: &[f64]) -> f64 {
 
     let total = values.len() as f64;
     let mut sum = 0.0;
-    for i in 0..n_bins {
-        sum += (min_val + (i as f64 + 0.5) * bin_width) * hist[i] as f64;
+    for (i, &h) in hist.iter().enumerate().take(n_bins) {
+        sum += (min_val + (i as f64 + 0.5) * bin_width) * h as f64;
     }
 
     let mut best_thresh = min_val;
     let mut best_variance = 0.0;
     let mut w_b = 0.0;
     let mut sum_b = 0.0;
-    for i in 0..n_bins {
-        w_b += hist[i] as f64;
+    for (i, &h) in hist.iter().enumerate().take(n_bins) {
+        w_b += h as f64;
         if w_b < 1.0 {
             continue;
         }
@@ -492,7 +492,7 @@ fn otsu_threshold(values: &[f64]) -> f64 {
         if w_f < 1.0 {
             break;
         }
-        sum_b += (min_val + (i as f64 + 0.5) * bin_width) * hist[i] as f64;
+        sum_b += (min_val + (i as f64 + 0.5) * bin_width) * h as f64;
         let m_b = sum_b / w_b;
         let m_f = (sum - sum_b) / w_f;
         let between = w_b * w_f * (m_b - m_f) * (m_b - m_f);
@@ -506,7 +506,7 @@ fn otsu_threshold(values: &[f64]) -> f64 {
 }
 
 fn percentile(values: &[f64], p: f64) -> f64 {
-    let mut sorted: Vec<f64> = values.iter().cloned().collect();
+    let mut sorted: Vec<f64> = values.to_vec();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(core::cmp::Ordering::Equal));
     let idx = (sorted.len() as f64 * p) as usize;
     let idx = idx.min(sorted.len() - 1);

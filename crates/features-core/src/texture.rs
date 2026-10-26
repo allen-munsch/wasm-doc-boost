@@ -321,8 +321,8 @@ pub fn glcm_features(gray: &[f64], width: usize, height: usize) -> Vec<f64> {
 
         // Energy
         let mut energy = 0.0;
-        for k in 0..256 {
-            energy += p[k] * p[k];
+        for &v in p.iter() {
+            energy += v * v;
         }
         energy_sum += energy;
 

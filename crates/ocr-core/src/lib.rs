@@ -151,9 +151,10 @@ pub enum OrderBy {
 /// - `Nnapi` — Android NNAPI acceleration (Android)
 /// - `Coreml` — Apple CoreML acceleration (macOS/iOS)
 /// - `Cann` — Huawei CANN / Ascend NPU acceleration (Linux)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum AccelerationDevice {
     /// CPU-only inference (default, always available)
+    #[default]
     Cpu,
     /// DirectML acceleration (Windows, DirectX 12 GPU)
     DirectML,
@@ -167,12 +168,6 @@ pub enum AccelerationDevice {
     Coreml,
     /// Huawei CANN / Ascend NPU acceleration (Linux)
     Cann,
-}
-
-impl Default for AccelerationDevice {
-    fn default() -> Self {
-        Self::Cpu
-    }
 }
 
 impl std::fmt::Display for AccelerationDevice {

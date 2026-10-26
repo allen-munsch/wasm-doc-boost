@@ -36,8 +36,8 @@ fn otsu_threshold(gray: &[f64]) -> f64 {
 
     let total = gray.len() as f64;
     let mut sum_all = 0.0;
-    for i in 0..256 {
-        sum_all += i as f64 * hist[i] as f64;
+    for (i, &h) in hist.iter().enumerate() {
+        sum_all += i as f64 * h as f64;
     }
 
     let mut best_thresh = 128.0;
@@ -45,8 +45,8 @@ fn otsu_threshold(gray: &[f64]) -> f64 {
     let mut w_b = 0.0;
     let mut sum_b = 0.0;
 
-    for i in 0..256 {
-        w_b += hist[i] as f64;
+    for (i, &h) in hist.iter().enumerate() {
+        w_b += h as f64;
         if w_b < 1.0 {
             continue;
         }
@@ -54,7 +54,7 @@ fn otsu_threshold(gray: &[f64]) -> f64 {
         if w_f < 1.0 {
             break;
         }
-        sum_b += i as f64 * hist[i] as f64;
+        sum_b += i as f64 * h as f64;
         let m_b = sum_b / w_b;
         let m_f = (sum_all - sum_b) / w_f;
         let between = w_b * w_f * (m_b - m_f) * (m_b - m_f);
@@ -246,13 +246,13 @@ fn vertical_projection_std(binary: &[bool], width: usize, height: usize) -> f64 
     }
     let mut row_counts = vec![0.0f64; height];
     let mut total = 0.0f64;
-    for y in 0..height {
+    for (y, slot) in row_counts.iter_mut().enumerate() {
         let row_start = y * width;
         let count = binary[row_start..row_start + width]
             .iter()
             .filter(|&&b| b)
             .count() as f64;
-        row_counts[y] = count;
+        *slot = count;
         total += count;
     }
     let mean = total / height as f64;
@@ -269,10 +269,10 @@ fn median(values: &[f64]) -> f64 {
     if values.is_empty() {
         return 0.0;
     }
-    let mut sorted: Vec<f64> = values.iter().cloned().collect();
+    let mut sorted: Vec<f64> = values.to_vec();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(core::cmp::Ordering::Equal));
     let mid = sorted.len() / 2;
-    if sorted.len() % 2 == 0 && mid > 0 {
+    if sorted.len().is_multiple_of(2) && mid > 0 {
         (sorted[mid - 1] + sorted[mid]) / 2.0
     } else {
         sorted[mid]
@@ -434,10 +434,10 @@ mod tests {
         for y in 0..h {
             for x in 0..w {
                 // Dark horizontal strokes at y=8 and y=16
-                let is_text = (y == 8 && x >= 4 && x <= 12)
-                    || (y == 8 && x >= 18 && x <= 26)
-                    || (y == 16 && x >= 6 && x <= 14)
-                    || (y == 16 && x >= 20 && x <= 28);
+                let is_text = (y == 8 && (4..=12).contains(&x))
+                    || (y == 8 && (18..=26).contains(&x))
+                    || (y == 16 && (6..=14).contains(&x))
+                    || (y == 16 && (20..=28).contains(&x));
                 if is_text {
                     pixels.push(0);
                     pixels.push(0);

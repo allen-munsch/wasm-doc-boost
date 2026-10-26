@@ -89,7 +89,7 @@ pub fn ctc_decode(probs: &[Vec<f32>], keys: &[String]) -> DecodedText {
             probs
                 .iter()
                 .flat_map(|t| t.iter().enumerate())
-                .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
+                .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
                 .map(|(idx, _)| idx)
                 .unwrap_or(0),
         );

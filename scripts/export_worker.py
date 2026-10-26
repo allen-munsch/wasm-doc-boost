@@ -103,7 +103,9 @@ def process_one(fname, label_vec, images_dir):
             if angle == 0:
                 rotated = img
             else:
-                rotated = img.rotate(-angle, expand=True, resample=Image.BICUBIC, fillcolor=fill)
+                rotated = img.rotate(
+                    -angle, expand=True, resample=Image.BICUBIC, fillcolor=fill
+                )
             rgb = rotated
             rw, rh = rgb.size
             pixels = np.array(rgb, dtype=np.uint8).tobytes()
@@ -115,7 +117,8 @@ def process_one(fname, label_vec, images_dir):
             labels_list.append(full_labels)
             fnames_list.append(f"{fname}_rot{angle}")
         return (feats_list, labels_list, fnames_list)
-    except Exception:
+    except (OSError, ValueError, RuntimeError) as e:
+        print(f"    skipping {fname}: {e}")
         return None
 
 
@@ -138,11 +141,15 @@ def process_one_v2(fname, label_vec, images_dir):
             if angle == 0:
                 rotated = img
             else:
-                rotated = img.rotate(angle, expand=True, resample=Image.BICUBIC, fillcolor=fill)
+                rotated = img.rotate(
+                    angle, expand=True, resample=Image.BICUBIC, fillcolor=fill
+                )
             rw, rh = rotated.size
             pixels = np.array(rotated, dtype=np.uint8).tobytes()
             feats = py_features.extract_all_v2(pixels, rw, rh)
-            assert len(feats) == V2_FEAT_COUNT, f"expected {V2_FEAT_COUNT} features, got {len(feats)}"
+            assert len(feats) == V2_FEAT_COUNT, (
+                f"expected {V2_FEAT_COUNT} features, got {len(feats)}"
+            )
 
             # Radon is deterministic and mod-180 blind; PIL CCW rotate by
             # `angle` puts the text-line axis at (180 - angle) mod 180.
@@ -162,14 +169,19 @@ def process_one_v2(fname, label_vec, images_dir):
         # source orientation oracle is the flip_score (asc-desc ink) of the
         # unrotated source, cross-checked between the 0 and 90 rotations
         # (both deskew to upright, so their flip_scores must agree).
-        fs0 = next(f[V2_FLIP_SCORE_INDEX] for f, a in zip(feats_list, angles_list) if a == 0.0)
-        fs90 = next(f[V2_FLIP_SCORE_INDEX] for f, a in zip(feats_list, angles_list) if a == 90.0)
+        fs0 = next(
+            f[V2_FLIP_SCORE_INDEX] for f, a in zip(feats_list, angles_list) if a == 0.0
+        )
+        fs90 = next(
+            f[V2_FLIP_SCORE_INDEX] for f, a in zip(feats_list, angles_list) if a == 90.0
+        )
         src_up = (fs0 + fs90) > 0.0
         for k, angle in enumerate(angles_list):
             needs_flip = (angle >= 180.0) != (not src_up)
             labels_list[k][5] = 1 if needs_flip else 0
         return (feats_list, labels_list, fnames_list, angles_list)
-    except Exception:
+    except (OSError, ValueError, RuntimeError) as e:
+        print(f"    skipping {fname}: {e}")
         return None
 
 
@@ -214,10 +226,17 @@ def main():
                 label_list.extend(lbls)
                 filename_list.extend(fnames)
         if (i + 1) % 500 == 0:
-            print(f"  [{os.getpid()}] {i + 1}/{len(filenames)}", file=sys.stderr, flush=True)
+            print(
+                f"  [{os.getpid()}] {i + 1}/{len(filenames)}",
+                file=sys.stderr,
+                flush=True,
+            )
 
     if not feature_list:
-        print(f"Worker {os.getpid()}: no features extracted ({errors} errors)", file=sys.stderr)
+        print(
+            f"Worker {os.getpid()}: no features extracted ({errors} errors)",
+            file=sys.stderr,
+        )
         return
 
     features = np.array(feature_list, dtype=np.float64)

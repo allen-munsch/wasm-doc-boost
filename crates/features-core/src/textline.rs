@@ -31,14 +31,14 @@ pub fn textline_flip_features(gray: &[f64], width: usize, height: usize) -> Vec<
 /// Flip features given the text-line axis (radians, mod pi) from the axis head.
 ///
 /// Returns 6 features:
-///   0. flip_score    — signed ascender/descender evidence in [-1, 1];
-///                      positive = upright, negative = flipped.
-///   1. vote_frac     — fraction of text lines whose asc > desc.
-///   2. n_lines       — number of valid text lines (coverage signal).
-///   3. asc_mass_frac — ascender ink / total line ink.
-///   4. desc_mass_frac— descender ink / total line ink.
-///   5. body_mass_frac— x-height body ink / total line ink (low when the page
-///                      is all caps/digits, i.e. the flip is unreliable).
+///
+/// - `flip_score` — signed ascender/descender evidence in [-1, 1]; positive = upright, negative = flipped.
+/// - `vote_frac` — fraction of text lines whose asc > desc.
+/// - `n_lines` — number of valid text lines (coverage signal).
+/// - `asc_mass_frac` — ascender ink / total line ink.
+/// - `desc_mass_frac` — descender ink / total line ink.
+/// - `body_mass_frac` — x-height body ink / total line ink (low when the page is all caps/digits, i.e. the flip is unreliable).
+///
 /// Per-line ink statistics for one deskew axis.
 struct LineStats {
     asc_total: usize,
@@ -344,7 +344,7 @@ fn median_usize(values: &[usize]) -> usize {
     for &v in values {
         counts[v - min] += 1;
     }
-    let half = (values.len() + 1) / 2;
+    let half = values.len().div_ceil(2);
     let mut acc = 0u32;
     for (i, &c) in counts.iter().enumerate() {
         acc += c;

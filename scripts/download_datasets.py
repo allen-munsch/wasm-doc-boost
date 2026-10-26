@@ -130,13 +130,12 @@ def download_url_raw(url: str, dest: str) -> None:
         return
     print(f"  Downloading {url} → {dest}")
     req = Request(url, headers={"User-Agent": "wasm-doc-boost/1.0"})
-    with urlopen(req) as resp:
-        with open(dest, "wb") as f:
-            while True:
-                chunk = resp.read(1 << 20)
-                if not chunk:
-                    break
-                f.write(chunk)
+    with urlopen(req) as resp, open(dest, "wb") as f:
+        while True:
+            chunk = resp.read(1 << 20)
+            if not chunk:
+                break
+            f.write(chunk)
 
 
 # ── Extractors ────────────────────────────────────────────────────────────
@@ -204,7 +203,8 @@ def copy_images(
             try:
                 img = Image.open(src).convert("RGB")
                 img.save(dest)
-            except Exception:
+            except (OSError, ValueError):
+                print(f"    skipping unreadable source image: {src}")
                 continue
         rows.append([fname, *label])
     print(f"  Wrote {len(rows)} images to {out_dir}")
@@ -230,7 +230,9 @@ def process_coru(raw_dir: str, out_dir: str, cfg: dict) -> list:
     done_marker = os.path.join(extract_root, ".extracted")
     if os.path.exists(done_marker):
         print(f"  Already extracted CORU: {extract_root}")
-        return copy_images(extract_root, out_dir, "coru", cfg["max_images"], cfg["label"])
+        return copy_images(
+            extract_root, out_dir, "coru", cfg["max_images"], cfg["label"]
+        )
 
     os.makedirs(extract_root, exist_ok=True)
     dataset_id = "abdoelsayed/CORU"
@@ -247,20 +249,28 @@ def process_cordv2(raw_dir: str, out_dir: str, cfg: dict) -> list:
     try:
         pass
     except ImportError:
-        raise RuntimeError("pandas is required for CORD-v2. Install: pip install pandas pyarrow")
+        raise RuntimeError(
+            "pandas is required for CORD-v2. Install: pip install pandas pyarrow"
+        )
 
     extract_root = os.path.join(raw_dir, cfg["extract_dir"])
     done_marker = os.path.join(extract_root, ".extracted")
     if os.path.exists(done_marker):
         print(f"  Already processed CORD-v2: {extract_root}")
-        return copy_images(extract_root, out_dir, "cord-v2", cfg["max_images"], cfg["label"])
+        return copy_images(
+            extract_root, out_dir, "cord-v2", cfg["max_images"], cfg["label"]
+        )
 
     os.makedirs(extract_root, exist_ok=True)
-    base_url = "https://huggingface.co/api/datasets/naver-clova-ix/cord-v2/parquet/default"
+    base_url = (
+        "https://huggingface.co/api/datasets/naver-clova-ix/cord-v2/parquet/default"
+    )
 
     # Get parquet file list
     for split in ("train",):
-        req = Request(f"{base_url}/{split}", headers={"User-Agent": "wasm-doc-boost/1.0"})
+        req = Request(
+            f"{base_url}/{split}", headers={"User-Agent": "wasm-doc-boost/1.0"}
+        )
         with urlopen(req) as resp:
             parquet_urls = json.loads(resp.read().decode())
 
@@ -272,10 +282,14 @@ def process_cordv2(raw_dir: str, out_dir: str, cfg: dict) -> list:
                     img_bytes = img_data.get("bytes")
                     if img_bytes:
                         img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
-                        img.save(os.path.join(extract_root, f"cord-v2_{split}_{idx}.png"))
+                        img.save(
+                            os.path.join(extract_root, f"cord-v2_{split}_{idx}.png")
+                        )
 
     Path(done_marker).touch()
-    return copy_images(extract_root, out_dir, "cord-v2", cfg["max_images"], cfg["label"])
+    return copy_images(
+        extract_root, out_dir, "cord-v2", cfg["max_images"], cfg["label"]
+    )
 
 
 # ── Per-dataset processor ─────────────────────────────────────────────────
@@ -318,9 +332,13 @@ def main():
     parser = argparse.ArgumentParser(description="Download training datasets")
     parser.add_argument("--data-dir", default="data", help="Base data directory")
     parser.add_argument("--skip", action="append", default=[], help="Datasets to skip")
-    parser.add_argument("--only", action="append", default=None, help="Only process these datasets")
     parser.add_argument(
-        "--continue-on-error", action="store_true", help="Don't abort on first download failure"
+        "--only", action="append", default=None, help="Only process these datasets"
+    )
+    parser.add_argument(
+        "--continue-on-error",
+        action="store_true",
+        help="Don't abort on first download failure",
     )
     args = parser.parse_args()
 
@@ -347,7 +365,9 @@ def main():
             print(f"  FAILED: {e}")
             failed.append(ds_name)
             if not args.continue_on_error:
-                print(f"\nAborting after {ds_name} failure. Use --continue-on-error to skip.")
+                print(
+                    f"\nAborting after {ds_name} failure. Use --continue-on-error to skip."
+                )
                 raise
 
     if failed:
@@ -368,7 +388,9 @@ def main():
     if all_rows:
         arr = np.array([r[1:] for r in all_rows], dtype=np.int8)
         for i, name in enumerate(LABEL_NAMES):
-            print(f"  {name}: {arr[:, i].sum()} positive, {len(arr) - arr[:, i].sum()} negative")
+            print(
+                f"  {name}: {arr[:, i].sum()} positive, {len(arr) - arr[:, i].sum()} negative"
+            )
     print(f"Labels: {csv_path}")
     print(
         f"\nNext: python scripts/export_features.py --images {out_dir}/ "

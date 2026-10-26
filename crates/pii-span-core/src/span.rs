@@ -280,18 +280,18 @@ impl SpanEngine {
         // A directory that already holds the fragments is used untouched; only a
         // missing one reaches the network.
         #[cfg(feature = "hub")]
-        if let Some(model) = config.hub {
-            if resolve_fragment(&config.models_dir, "encoder", config.precision).is_none() {
-                // Nothing on disk, so `autodetect` had no files to inspect and
-                // fell back to FP32. Let the transport pick instead: a bound
-                // chain wants the FP16 I/O graphs, the standard path does not.
-                if !config.precision_pinned {
-                    config.precision = config.execution.preferred_precision();
-                }
-                let (dir, got) = crate::hub::download(model, config.precision)?;
-                config.models_dir = dir;
-                config.precision = got;
+        if let Some(model) = config.hub
+            && resolve_fragment(&config.models_dir, "encoder", config.precision).is_none()
+        {
+            // Nothing on disk, so `autodetect` had no files to inspect and
+            // fell back to FP32. Let the transport pick instead: a bound
+            // chain wants the FP16 I/O graphs, the standard path does not.
+            if !config.precision_pinned {
+                config.precision = config.execution.preferred_precision();
             }
+            let (dir, got) = crate::hub::download(model, config.precision)?;
+            config.models_dir = dir;
+            config.precision = got;
         }
 
         let dir = &config.models_dir;

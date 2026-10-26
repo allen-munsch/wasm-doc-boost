@@ -119,8 +119,8 @@ fn preprocess(image: &DynamicImage) -> Result<Vec<f32>, PaddleOcrError> {
     let resized = image.resize_exact(new_w, new_h, image::imageops::FilterType::Triangle);
 
     // Step 2: Center crop
-    let crop_x = ((new_w - CROP_SIZE) / 2).max(0) as u32;
-    let crop_y = ((new_h - CROP_SIZE) / 2).max(0) as u32;
+    let crop_x = (new_w - CROP_SIZE) / 2;
+    let crop_y = (new_h - CROP_SIZE) / 2;
 
     // Ensure we have valid crop dimensions
     let actual_crop_w = CROP_SIZE.min(new_w);
@@ -163,7 +163,6 @@ fn preprocess(image: &DynamicImage) -> Result<Vec<f32>, PaddleOcrError> {
 /// # Returns
 ///
 /// A tuple of `(predicted_class_index, confidence_score)`.
-
 fn softmax_argmax(logits: &[f32]) -> (usize, f32) {
     // Compute softmax
     let max_logit = logits.iter().copied().fold(f32::NEG_INFINITY, f32::max);

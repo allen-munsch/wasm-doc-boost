@@ -50,7 +50,7 @@ fn scan_international_phone(text: &str, hits: &mut Vec<Hit>) {
         }
         let candidate = &text[i..j];
         let digit_count = candidate.chars().filter(|c| c.is_ascii_digit()).count();
-        if digit_count >= 7 && digit_count <= 15 {
+        if (7..=15).contains(&digit_count) {
             // Don't flag standalone "+NNNNNNN" as phone (must have formatting)
             if candidate.contains('-') || candidate.contains('(') || candidate.contains(' ') {
                 hits.push(Hit {

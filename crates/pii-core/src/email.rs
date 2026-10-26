@@ -79,12 +79,11 @@ pub fn scan_email(text: &str, hits: &mut Vec<Hit>) {
                 continue; // skip: too short or no dot
             }
             // TLD must be at least 2 alphabetic chars
-            if j >= 3 && bytes[j - 2..j].iter().all(u8::is_ascii_alphabetic) {
-                j
-            } else if j >= 4
-                && bytes[j - 3..j].iter().all(u8::is_ascii_alphabetic)
-                && bytes[j - 4] == b'.'
-            {
+            let tld_ok = (j >= 3 && bytes[j - 2..j].iter().all(u8::is_ascii_alphabetic))
+                || (j >= 4
+                    && bytes[j - 3..j].iter().all(u8::is_ascii_alphabetic)
+                    && bytes[j - 4] == b'.');
+            if tld_ok {
                 j
             } else {
                 continue;

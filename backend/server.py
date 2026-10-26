@@ -10,11 +10,6 @@ First run will download the model (~2GB) from HuggingFace.
 GPU recommended — CPU inference is extremely slow.
 """
 
-from glmocr.layout import PPDocLayoutDetector
-from glmocr.config import load_config as glmocr_load_config
-import uvicorn
-
-
 import argparse
 import base64
 import io
@@ -25,8 +20,11 @@ from contextlib import asynccontextmanager
 from typing import Any, cast
 
 import torch
+import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from glmocr.config import load_config as glmocr_load_config
+from glmocr.layout import PPDocLayoutDetector
 from PIL import Image
 from transformers import AutoProcessor, GlmOcrForConditionalGeneration
 
@@ -43,9 +41,17 @@ async def lifespan(app: FastAPI):
     global model, processor, layout_detector
     print(f"[glm-ocr] Loading {MODEL_ID} on {DEVICE}...")
     t0 = time.time()
-    model = cast(Any, GlmOcrForConditionalGeneration.from_pretrained(
-        MODEL_ID, torch_dtype=torch.bfloat16 if DEVICE == "cuda" else torch.float32
-    )).to(DEVICE).eval()
+    model = (
+        cast(
+            Any,
+            GlmOcrForConditionalGeneration.from_pretrained(
+                MODEL_ID,
+                torch_dtype=torch.bfloat16 if DEVICE == "cuda" else torch.float32,
+            ),
+        )
+        .to(DEVICE)
+        .eval()
+    )
     processor = AutoProcessor.from_pretrained(MODEL_ID, trust_remote_code=True)
     print(f"[glm-ocr] Ready in {time.time() - t0:.1f}s")
 
@@ -118,7 +124,9 @@ def _run_ocr(pil_image: Image.Image, prompt: str, max_tokens: int = 512) -> str:
         },
     ]
     prompt_text = processor.apply_chat_template(messages, add_generation_prompt=True)
-    inputs = processor(text=prompt_text, images=pil_image, return_tensors="pt").to(DEVICE)
+    inputs = processor(text=prompt_text, images=pil_image, return_tensors="pt").to(
+        DEVICE
+    )
 
     with torch.inference_mode():
         generated = model.generate(
@@ -131,7 +139,9 @@ def _run_ocr(pil_image: Image.Image, prompt: str, max_tokens: int = 512) -> str:
 
     prompt_len = inputs["input_ids"].shape[-1]
     new_ids = generated[0, prompt_len:]
-    return cast(str, processor.tokenizer.decode(new_ids, skip_special_tokens=True).strip())
+    return cast(
+        str, processor.tokenizer.decode(new_ids, skip_special_tokens=True).strip()
+    )
 
 
 @app.get("/health")
@@ -160,15 +170,15 @@ async def ocr(request: Request):
     try:
         image_bytes = base64.b64decode(image_b64)
         image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-    except Exception as e:
+    except (ValueError, OSError) as e:
         raise HTTPException(status_code=400, detail=f"Invalid image: {e}")
 
     t0 = time.time()
 
     if mode == "full":
         output_text = _run_ocr(image, prompt, max_tokens=2048)
-        output_text = re.sub(r'^```(?:json)?\s*\n?', '', output_text)
-        output_text = re.sub(r'\n?```\s*$', '', output_text)
+        output_text = re.sub(r"^```(?:json)?\s*\n?", "", output_text)
+        output_text = re.sub(r"\n?```\s*$", "", output_text)
         try:
             parsed = json.loads(output_text)
         except json.JSONDecodeError:
@@ -179,8 +189,8 @@ async def ocr(request: Request):
         for i, r in enumerate(regions):
             crop = image.crop((r["bbox"][0], r["bbox"][1], r["bbox"][2], r["bbox"][3]))
             text = _run_ocr(crop, prompt, max_tokens=512)
-            text = re.sub(r'^```(?:json)?\s*\n?', '', text)
-            text = re.sub(r'\n?```\s*$', '', text)
+            text = re.sub(r"^```(?:json)?\s*\n?", "", text)
+            text = re.sub(r"\n?```\s*$", "", text)
             parsed.append({"text": text.strip(), "bbox": r["bbox"]})
 
     elapsed = time.time() - t0
@@ -200,11 +210,12 @@ async def ocr(request: Request):
 
 
 if __name__ == "__main__":
-
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--host", default="0.0.0.0")
-    parser.add_argument("--reload", action="store_true", help="Auto-reload on code changes")
+    parser.add_argument(
+        "--reload", action="store_true", help="Auto-reload on code changes"
+    )
     args = parser.parse_args()
 
     uvicorn.run(

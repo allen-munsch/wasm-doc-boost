@@ -119,7 +119,9 @@ def train_models(X_train: np.ndarray, y_train: np.ndarray) -> list[xgb.XGBClassi
         )
         model.fit(X_train, y_train[:, i])
         models.append(model)
-        print(f"  {name}: {model.n_estimators} trees, pos_weight={scale_pos_weight:.1f}")
+        print(
+            f"  {name}: {model.n_estimators} trees, pos_weight={scale_pos_weight:.1f}"
+        )
     return models
 
 
@@ -211,7 +213,9 @@ def kfold_cv(X: np.ndarray, y: np.ndarray, k: int = 5) -> dict[str, Any]:
 
     # Overfitting gap: val - train delta per label
     print("\n=== K-Fold Summary (mean ± std) ===")
-    print(f"{'Label':<14} {'Split':<6} {'AUC':<22} {'F5':<22} {'Recall':<22} {'Precision':<22}")
+    print(
+        f"{'Label':<14} {'Split':<6} {'AUC':<22} {'F5':<22} {'Recall':<22} {'Precision':<22}"
+    )
     print("-" * 108)
     for name in LABEL_NAMES:
         t = train_agg[name]
@@ -299,16 +303,25 @@ def compute_feature_importance(models: list[xgb.XGBClassifier]) -> np.ndarray:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Train multi-label XGBoost for wasm-doc-boost")
+    parser = argparse.ArgumentParser(
+        description="Train multi-label XGBoost for wasm-doc-boost"
+    )
     parser.add_argument("--features", required=True, help="features.npz path")
-    parser.add_argument("--output", default="data/model.json", help="Output JSON model path")
-    parser.add_argument("--report", default="data/report.json", help="Evaluation report path")
     parser.add_argument(
-        "--kfold", type=int, default=0, help="Run k-fold CV (e.g., --kfold 5); skips model export"
+        "--output", default="data/model.json", help="Output JSON model path"
+    )
+    parser.add_argument(
+        "--report", default="data/report.json", help="Evaluation report path"
+    )
+    parser.add_argument(
+        "--kfold",
+        type=int,
+        default=0,
+        help="Run k-fold CV (e.g., --kfold 5); skips model export",
     )
     args = parser.parse_args()
 
-    X, y, filenames = load_data(args.features)
+    X, y, _ = load_data(args.features)
 
     if args.kfold > 0:
         print(f"\n=== {args.kfold}-Fold Cross-Validation ===")

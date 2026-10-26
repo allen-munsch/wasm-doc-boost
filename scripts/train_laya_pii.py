@@ -56,21 +56,77 @@ QUESTION = {
 }
 
 TARGET_ALIASES = {
-    "PAN": {"CREDIT_CARD", "CREDITCARD", "CARD_NUMBER", "CARDNUMBER", "PAN",
-            "BANK_CARD", "BANKCARD", "CARD", "DEBIT_CARD", "DEBITCARD"},
-    "CVV": {"CVV", "CVC", "CVV2", "CVC2", "SECURITY_CODE", "SECURITYCODE",
-            "CARD_SECURITY_CODE"},
-    "DL": {"DRIVER_LICENSE", "DRIVERLICENSE", "DRIVERS_LICENSE", "DRIVER_LICENCE",
-           "DL_NUMBER", "DLNUMBER", "DRIVING_LICENSE", "LICENSE_NUMBER",
-           "DRIVING_LICENCE"},
-    "GOV_ID": {"SSN", "SOCIAL_SECURITY", "SOCIALSECURITY", "GOVERNMENT_ID",
-               "GOVERNMENTID", "NATIONAL_ID", "NATIONALID", "TAX_ID", "TAXID",
-               "NID", "GOV_ID", "GOVT_ID", "IDCARD", "ID_CARD", "IDENTITY_CARD"},
+    "PAN": {
+        "CREDIT_CARD",
+        "CREDITCARD",
+        "CARD_NUMBER",
+        "CARDNUMBER",
+        "PAN",
+        "BANK_CARD",
+        "BANKCARD",
+        "CARD",
+        "DEBIT_CARD",
+        "DEBITCARD",
+    },
+    "CVV": {
+        "CVV",
+        "CVC",
+        "CVV2",
+        "CVC2",
+        "SECURITY_CODE",
+        "SECURITYCODE",
+        "CARD_SECURITY_CODE",
+    },
+    "DL": {
+        "DRIVER_LICENSE",
+        "DRIVERLICENSE",
+        "DRIVERS_LICENSE",
+        "DRIVER_LICENCE",
+        "DL_NUMBER",
+        "DLNUMBER",
+        "DRIVING_LICENSE",
+        "LICENSE_NUMBER",
+        "DRIVING_LICENCE",
+    },
+    "GOV_ID": {
+        "SSN",
+        "SOCIAL_SECURITY",
+        "SOCIALSECURITY",
+        "GOVERNMENT_ID",
+        "GOVERNMENTID",
+        "NATIONAL_ID",
+        "NATIONALID",
+        "TAX_ID",
+        "TAXID",
+        "NID",
+        "GOV_ID",
+        "GOVT_ID",
+        "IDCARD",
+        "ID_CARD",
+        "IDENTITY_CARD",
+    },
     "PASSPORT": {"PASSPORT", "PASSPORT_NUMBER", "PASSPORTNUMBER"},
-    "TRACK": {"TRACK", "TRACK_DATA", "TRACKDATA", "MAGSTRIPE", "MAG_STRIPE",
-              "MAGNETIC_STRIPE", "TRACK1", "TRACK2", "TRACK_1", "TRACK_2"},
-    "PIN": {"PIN", "PIN_CODE", "PINCODE", "PIN_NUMBER", "PINNUMBER", "ATM_PIN",
-            "ATMPIN"},
+    "TRACK": {
+        "TRACK",
+        "TRACK_DATA",
+        "TRACKDATA",
+        "MAGSTRIPE",
+        "MAG_STRIPE",
+        "MAGNETIC_STRIPE",
+        "TRACK1",
+        "TRACK2",
+        "TRACK_1",
+        "TRACK_2",
+    },
+    "PIN": {
+        "PIN",
+        "PIN_CODE",
+        "PINCODE",
+        "PIN_NUMBER",
+        "PINNUMBER",
+        "ATM_PIN",
+        "ATMPIN",
+    },
     "PIN_BLOCK": {"PIN_BLOCK", "PINBLOCK", "PIN_BLOCK_DATA"},
 }
 
@@ -90,6 +146,7 @@ def target_type_of(label: str) -> str | None:
 
 # ── synthetic data ──────────────────────────────────────────────────────────
 
+
 def luhn_checksum(number: str) -> int:
     total = 0
     for i, ch in enumerate(reversed(number)):
@@ -103,7 +160,9 @@ def luhn_checksum(number: str) -> int:
 
 
 def make_pan(prefix: str = "4", length: int = 16) -> str:
-    body = prefix + "".join(random.choice("0123456789") for _ in range(length - 1 - len(prefix)))
+    body = prefix + "".join(
+        random.choice("0123456789") for _ in range(length - 1 - len(prefix))
+    )
     total = 0
     rev_body = body[::-1]
     for i, ch in enumerate(rev_body):
@@ -121,26 +180,40 @@ def _rand_digits(n: int) -> str:
 
 
 TEMPLATES = [
-    ("Customer card {pan} exp {exp} cvv {cvv} was charged $99.00.",
-     "Customer card XXXX XXXX XXXX XXXX exp XX/XX cvv XXX was charged $99.00."),
-    ("Order paid with Visa {pan}, security code {cvv}, expires {exp}.",
-     "Order paid with Visa XXXX XXXX XXXX XXXX, security code XXX, expires XX/XX."),
-    ("Track 2 data: ;{pan}={exp}101{cvv}0000000?",
-     "Track 2 data: ;XXXX=XX101XXX0000000?"),
-    ("The card PIN is {pin}.",
-     "The card PIN is XXXX."),
-    ("Driver's license number {dl} on file.",
-     "Driver's license number XX-XXX-XXXX on file."),
-    ("Passport number {passport} for travel.",
-     "Passport number XXXXXXXX for travel."),
-    ("Government ID {gov} for the applicant.",
-     "Government ID XXX-XX-XXXX for the applicant."),
-    ("Card {pan} with PIN {pin} and CVV {cvv}.",
-     "Card XXXX XXXX XXXX XXXX with PIN XXXX and CVV XXX."),
-    ("Track 1 data: %B{pan}^DOE/JOHN^{exp}10100000000000000000?",
-     "Track 1 data: %BXXXX^DOE/JOHN^XXXX10100000000000000000?"),
-    ("PIN block: {pin_block} (ISO 9564 format 0).",
-     "PIN block: XXXXXXXXXXXXXXXX (ISO 9564 format 0)."),
+    (
+        "Customer card {pan} exp {exp} cvv {cvv} was charged $99.00.",
+        "Customer card XXXX XXXX XXXX XXXX exp XX/XX cvv XXX was charged $99.00.",
+    ),
+    (
+        "Order paid with Visa {pan}, security code {cvv}, expires {exp}.",
+        "Order paid with Visa XXXX XXXX XXXX XXXX, security code XXX, expires XX/XX.",
+    ),
+    (
+        "Track 2 data: ;{pan}={exp}101{cvv}0000000?",
+        "Track 2 data: ;XXXX=XX101XXX0000000?",
+    ),
+    ("The card PIN is {pin}.", "The card PIN is XXXX."),
+    (
+        "Driver's license number {dl} on file.",
+        "Driver's license number XX-XXX-XXXX on file.",
+    ),
+    ("Passport number {passport} for travel.", "Passport number XXXXXXXX for travel."),
+    (
+        "Government ID {gov} for the applicant.",
+        "Government ID XXX-XX-XXXX for the applicant.",
+    ),
+    (
+        "Card {pan} with PIN {pin} and CVV {cvv}.",
+        "Card XXXX XXXX XXXX XXXX with PIN XXXX and CVV XXX.",
+    ),
+    (
+        "Track 1 data: %B{pan}^DOE/JOHN^{exp}10100000000000000000?",
+        "Track 1 data: %BXXXX^DOE/JOHN^XXXX10100000000000000000?",
+    ),
+    (
+        "PIN block: {pin_block} (ISO 9564 format 0).",
+        "PIN block: XXXXXXXXXXXXXXXX (ISO 9564 format 0).",
+    ),
 ]
 
 
@@ -148,7 +221,7 @@ def make_synthetic_pair() -> tuple[str, str]:
     tmpl_pos, tmpl_neg = random.choice(TEMPLATES)
     values = {
         "pan": make_pan(),
-        "exp": f"{random.randint(1,12):02d}/{random.randint(24,30)}",
+        "exp": f"{random.randint(1, 12):02d}/{random.randint(24, 30)}",
         "cvv": _rand_digits(3),
         "pin": _rand_digits(4),
         "dl": f"{_rand_digits(3)}-{_rand_digits(3)}-{_rand_digits(4)}",
@@ -161,14 +234,13 @@ def make_synthetic_pair() -> tuple[str, str]:
 
 # ── training item construction ──────────────────────────────────────────────
 
+
 def build_training_item(state: str, is_pii: bool, tok, cfg: dict) -> dict | None:
     from laya.common import build_sequence, render_options
 
     target = [0.0, 1.0] if is_pii else [1.0, 0.0]
     q = {"t": "noul", "ins": QUESTION["instructions"], "crit": {}}
-    seq, markers = build_sequence(
-        tok, state, q, cfg["max_len"], cfg["head_max_len"]
-    )
+    seq, markers = build_sequence(tok, state, q, cfg["max_len"], cfg["head_max_len"])
     if len(markers) != len(render_options(q)):
         return None
     return {
@@ -231,6 +303,7 @@ def fit_one_temp(sel) -> float:
 
 # ── data loaders ────────────────────────────────────────────────────────────
 
+
 def load_synthetic_items(n: int, tok, cfg: dict) -> list[dict]:
     items = []
     for _ in range(n):
@@ -289,7 +362,9 @@ def load_ai4privacy_items(limit: int, tok, cfg: dict) -> list[dict]:
             items.append(it_neg)
         if limit and len(items) >= limit:
             break
-    print(f"[data] ai4privacy: {len(items)} items; target-type span counts: {seen_types}")
+    print(
+        f"[data] ai4privacy: {len(items)} items; target-type span counts: {seen_types}"
+    )
     return items
 
 
@@ -329,28 +404,36 @@ def make_hard_negative(rng: random.Random) -> str:
         return rng.choice(CLEAN_TEMPLATES)
     if kind < 0.80:
         pan = make_non_luhn_pan()
-        return rng.choice([
-            f"Order reference {pan} will ship within two business days.",
-            f"Your ticket number {pan} has been confirmed.",
-            f"Lot number {pan} is currently out of stock.",
-            f"Reference code {pan} for your records.",
-        ])
+        return rng.choice(
+            [
+                f"Order reference {pan} will ship within two business days.",
+                f"Your ticket number {pan} has been confirmed.",
+                f"Lot number {pan} is currently out of stock.",
+                f"Reference code {pan} for your records.",
+            ]
+        )
     if kind < 0.88:
         d = _rand_digits(rng.choice([4, 5, 6]))
-        return rng.choice([
-            f"The invoice total comes to ${d}.00 including tax.",
-            f"Please dial extension {d} for billing support.",
-            f"Room {d} is reserved under your company name.",
-            f"Your confirmation code is {d}.",
-        ])
+        return rng.choice(
+            [
+                f"The invoice total comes to ${d}.00 including tax.",
+                f"Please dial extension {d} for billing support.",
+                f"Room {d} is reserved under your company name.",
+                f"Your confirmation code is {d}.",
+            ]
+        )
     hex_digest = "".join(rng.choice("0123456789ABCDEF") for _ in range(16))
-    return rng.choice([
-        f"Checksum {hex_digest} verified for the archive.",
-        "Legacy data: ;4111111111111112=25121010000000000000?",
-    ])
+    return rng.choice(
+        [
+            f"Checksum {hex_digest} verified for the archive.",
+            "Legacy data: ;4111111111111112=25121010000000000000?",
+        ]
+    )
 
 
-def build_hybrid_texts(limit: int, seed: int = 42, synth_frac: float = 0.5) -> tuple[list[str], list[str]]:
+def build_hybrid_texts(
+    limit: int, seed: int = 42, synth_frac: float = 0.5
+) -> tuple[list[str], list[str]]:
     """Return (positives, negatives) raw strings, 50/50 balanced.
 
     ``synth_frac`` of positives are synthetic Luhn-valid PCI (PAN/CVV/track/PIN/
@@ -390,7 +473,9 @@ def build_hybrid_texts(limit: int, seed: int = 42, synth_frac: float = 0.5) -> t
                 continue
             if not (0 <= s < e <= len(text)):
                 continue
-            (target_hits if target_type_of(label) is not None else other_hits).append((s, e))
+            (target_hits if target_type_of(label) is not None else other_hits).append(
+                (s, e)
+            )
 
         if target_hits:
             if len(pos_texts) < n_real_pos:
@@ -433,42 +518,54 @@ def load_hybrid_items(limit: int, tok, cfg: dict) -> list[dict]:
         it = build_training_item(t, False, tok, cfg)
         if it:
             items.append(it)
-    print(f"[data] hybrid: {len(pos_texts)} positives + {len(neg_texts)} negatives "
-          f"-> {len(items)} items")
+    print(
+        f"[data] hybrid: {len(pos_texts)} positives + {len(neg_texts)} negatives "
+        f"-> {len(items)} items"
+    )
     return items
 
 
 # ── main ────────────────────────────────────────────────────────────────────
 
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--model-id", default="convaiinnovations/laya")
-    ap.add_argument("--data", choices=["synthetic", "ai4privacy", "hybrid"], default="synthetic")
-    ap.add_argument("--max-samples", type=int, default=256,
-                    help="cap on positive examples (items = 2x this)")
+    ap.add_argument(
+        "--data", choices=["synthetic", "ai4privacy", "hybrid"], default="synthetic"
+    )
+    ap.add_argument(
+        "--max-samples",
+        type=int,
+        default=256,
+        help="cap on positive examples (items = 2x this)",
+    )
     ap.add_argument("--epochs", type=int, default=3)
     ap.add_argument("--micro-batch", type=int, default=4)
     ap.add_argument("--grad-accum", type=int, default=4)
     ap.add_argument("--lora-r", type=int, default=16)
     ap.add_argument("--lora-alpha", type=int, default=32)
     ap.add_argument("--max-len", type=int, default=512)
-    ap.add_argument("--output-dir", default=None,
-                    help="if set, write a merged Laya checkpoint here")
+    ap.add_argument(
+        "--output-dir", default=None, help="if set, write a merged Laya checkpoint here"
+    )
     ap.add_argument("--no-save", action="store_true")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--device", default=None)
     args = ap.parse_args()
 
     from huggingface_hub import snapshot_download
-    from transformers import AutoTokenizer
     from laya.agent import _fix_tokenizer_config
     from laya.common import build_model
+    from transformers import AutoTokenizer
 
     random.seed(args.seed)
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
 
-    device = torch.device(args.device or ("cuda" if torch.cuda.is_available() else "cpu"))
+    device = torch.device(
+        args.device or ("cuda" if torch.cuda.is_available() else "cpu")
+    )
     print(f"[setup] device={device}")
 
     model_dir = snapshot_download(args.model_id)
@@ -484,12 +581,16 @@ def main() -> None:
 
     model = build_model(cfg, encoder_dir=os.path.join(model_dir, "encoder"))
     from safetensors.torch import load_file
-    model.load_state_dict(load_file(os.path.join(model_dir, "model.safetensors")), strict=True)
+
+    model.load_state_dict(
+        load_file(os.path.join(model_dir, "model.safetensors")), strict=True
+    )
 
     # LoRA over the frozen ModernBERT encoder linears; head trains fully.
     # Wrap only the encoder submodule: peft must not wrap DecisionModel itself,
     # whose non-standard forward signature confuses peft's inputs_embeds path.
     from peft import LoraConfig, get_peft_model
+
     model.encoder = get_peft_model(
         model.encoder,
         LoraConfig(
@@ -508,7 +609,7 @@ def main() -> None:
         model.encoder.gradient_checkpointing_enable(
             gradient_checkpointing_kwargs={"use_reentrant": False}
         )
-    except Exception as e:
+    except (ValueError, AttributeError) as e:
         print(f"[setup] gradient checkpointing skipped: {e}")
 
     # data
@@ -520,14 +621,18 @@ def main() -> None:
     else:
         items = load_synthetic_items(args.max_samples, tok, cfg)
     random.shuffle(items)
-    print(f"[data] {len(items)} training items in {time.time()-t0:.1f}s")
+    print(f"[data] {len(items)} training items in {time.time() - t0:.1f}s")
 
     if not items:
         sys.exit("[data] no items built — aborting")
 
     # optimizer split: LoRA adapters vs head
-    lora_params = [p for n, p in model.named_parameters() if p.requires_grad and "lora" in n]
-    head_params = [p for n, p in model.named_parameters() if p.requires_grad and "lora" not in n]
+    lora_params = [
+        p for n, p in model.named_parameters() if p.requires_grad and "lora" in n
+    ]
+    head_params = [
+        p for n, p in model.named_parameters() if p.requires_grad and "lora" not in n
+    ]
     optimizer = torch.optim.AdamW(
         [
             {"params": lora_params, "lr": 2.5e-5},
@@ -550,8 +655,10 @@ def main() -> None:
     model.train()
     pad_id = tok.pad_token_id
 
-    print(f"[train] {EPOCHS} epochs, micro_batch={MICRO_BATCH}, grad_accum={GRAD_ACCUM}, "
-          f"updates={total_updates}")
+    print(
+        f"[train] {EPOCHS} epochs, micro_batch={MICRO_BATCH}, grad_accum={GRAD_ACCUM}, "
+        f"updates={total_updates}"
+    )
 
     for epoch in range(EPOCHS):
         random.shuffle(items)
@@ -561,7 +668,7 @@ def main() -> None:
         n_batches = 0
 
         for b_idx in range(0, len(items), MICRO_BATCH):
-            chunk = items[b_idx:b_idx + MICRO_BATCH]
+            chunk = items[b_idx : b_idx + MICRO_BATCH]
             if not chunk:
                 continue
             batch = collate_train_batch(chunk, pad_id)
@@ -570,11 +677,16 @@ def main() -> None:
             mpos = batch["marker_pos"].to(device)
             mmask = batch["marker_mask"].to(device)
             qtype = batch["qtype"].to(device)
-            with torch.autocast("cuda", dtype=torch.float16, enabled=(device.type == "cuda")):
+            with torch.autocast(
+                "cuda", dtype=torch.float16, enabled=(device.type == "cuda")
+            ):
                 logits, _ = model(ids, att, mpos, mmask, qtype)
 
             logits = logits.float()
-            loss = torch.nn.functional.cross_entropy(logits, batch["label"].to(device)) / GRAD_ACCUM
+            loss = (
+                torch.nn.functional.cross_entropy(logits, batch["label"].to(device))
+                / GRAD_ACCUM
+            )
 
             scaler.scale(loss).backward()
             accum_step += 1
@@ -591,31 +703,44 @@ def main() -> None:
             n_batches += 1
 
             if n_batches % 20 == 0:
-                print(f"  epoch {epoch+1}/{EPOCHS} step {n_batches} loss "
-                      f"{loss.item()*GRAD_ACCUM:.4f}")
+                print(
+                    f"  epoch {epoch + 1}/{EPOCHS} step {n_batches} loss "
+                    f"{loss.item() * GRAD_ACCUM:.4f}"
+                )
 
-        print(f"=== epoch {epoch+1}/{EPOCHS} done in {time.time()-t0:.1f}s | "
-              f"avg loss {epoch_loss/max(1,n_batches):.4f} ===")
+        print(
+            f"=== epoch {epoch + 1}/{EPOCHS} done in {time.time() - t0:.1f}s | "
+            f"avg loss {epoch_loss / max(1, n_batches):.4f} ==="
+        )
 
     # held-out eval across three buckets: live PII, clean prose/near-miss, masked forms
     model.eval()
     rng_eval = random.Random(args.seed ^ 0x5EED)
     pos_texts = [make_synthetic_pair()[0] for _ in range(32)]
-    clean_neg = [rng_eval.choice(CLEAN_TEMPLATES) if i % 2 == 0
-                 else f"Order reference {make_non_luhn_pan()} will ship within two business days."
-                 for i in range(32)]
+    clean_neg = [
+        rng_eval.choice(CLEAN_TEMPLATES)
+        if i % 2 == 0
+        else f"Order reference {make_non_luhn_pan()} will ship within two business days."
+        for i in range(32)
+    ]
     masked_neg = [make_synthetic_pair()[1] for _ in range(32)]
 
     def score_bucket(texts, label):
-        items = [it for it in (build_training_item(t, label, tok, cfg) for t in texts) if it]
+        items = [
+            it for it in (build_training_item(t, label, tok, cfg) for t in texts) if it
+        ]
         correct = 0
         with torch.no_grad():
             for b_idx in range(0, len(items), 16):
-                batch = collate_train_batch(items[b_idx:b_idx + 16], pad_id)
-                with torch.autocast("cuda", dtype=torch.float16, enabled=(device.type == "cuda")):
+                batch = collate_train_batch(items[b_idx : b_idx + 16], pad_id)
+                with torch.autocast(
+                    "cuda", dtype=torch.float16, enabled=(device.type == "cuda")
+                ):
                     logits, _ = model(
-                        batch["input_ids"].to(device), batch["attention_mask"].to(device),
-                        batch["marker_pos"].to(device), batch["marker_mask"].to(device),
+                        batch["input_ids"].to(device),
+                        batch["attention_mask"].to(device),
+                        batch["marker_pos"].to(device),
+                        batch["marker_mask"].to(device),
                         batch["qtype"].to(device),
                     )
                 preds = logits.float().argmax(-1).cpu()
@@ -638,12 +763,16 @@ def main() -> None:
     calib = items[:: max(1, len(items) // 400)][:400]
     with torch.no_grad():
         for b_idx in range(0, len(calib), 16):
-            chunk = calib[b_idx:b_idx + 16]
+            chunk = calib[b_idx : b_idx + 16]
             batch = collate_train_batch(chunk, pad_id)
-            with torch.autocast("cuda", dtype=torch.float16, enabled=(device.type == "cuda")):
+            with torch.autocast(
+                "cuda", dtype=torch.float16, enabled=(device.type == "cuda")
+            ):
                 l_sub, _ = model(
-                    batch["input_ids"].to(device), batch["attention_mask"].to(device),
-                    batch["marker_pos"].to(device), batch["marker_mask"].to(device),
+                    batch["input_ids"].to(device),
+                    batch["attention_mask"].to(device),
+                    batch["marker_pos"].to(device),
+                    batch["marker_mask"].to(device),
                     batch["qtype"].to(device),
                 )
             l_np = l_sub.float().cpu().numpy()
@@ -655,12 +784,15 @@ def main() -> None:
         sel = [(z, t) for q_type, z, t in calib_preds if q_type == qt]
         if sel:
             fitted_temps[qt] = fit_one_temp(sel)
-    print(f"[save] fitted temperatures (choice,score,noul): {[round(x,3) for x in fitted_temps]}")
+    print(
+        f"[save] fitted temperatures (choice,score,noul): {[round(x, 3) for x in fitted_temps]}"
+    )
 
     model.encoder = model.encoder.merge_and_unload()
     merged = model
     os.makedirs(args.output_dir, exist_ok=True)
     from safetensors.torch import save_file
+
     sd = {k: v.half().contiguous().cpu() for k, v in merged.state_dict().items()}
     save_file(sd, os.path.join(args.output_dir, "model.safetensors"))
     merged.encoder.config.save_pretrained(os.path.join(args.output_dir, "encoder"))

@@ -53,12 +53,24 @@ BASE_PARAMS: dict[str, Any] = {
     "eval_metric": "auc",
 }
 LABEL_PARAMS: dict[str, dict[str, Any]] = {
-    "is_crumpled": {"max_depth": 3, "n_estimators": 80, "reg_alpha": 0.5,
-                     "reg_lambda": 5.0, "min_child_weight": 3, "subsample": 0.7,
-                     "colsample_bytree": 0.7},
-    "is_shadow": {"max_depth": 3, "n_estimators": 80, "reg_alpha": 0.5,
-                   "reg_lambda": 5.0, "min_child_weight": 3, "subsample": 0.7,
-                   "colsample_bytree": 0.7},
+    "is_crumpled": {
+        "max_depth": 3,
+        "n_estimators": 80,
+        "reg_alpha": 0.5,
+        "reg_lambda": 5.0,
+        "min_child_weight": 3,
+        "subsample": 0.7,
+        "colsample_bytree": 0.7,
+    },
+    "is_shadow": {
+        "max_depth": 3,
+        "n_estimators": 80,
+        "reg_alpha": 0.5,
+        "reg_lambda": 5.0,
+        "min_child_weight": 3,
+        "subsample": 0.7,
+        "colsample_bytree": 0.7,
+    },
     "flip": {"max_depth": 4, "n_estimators": 160},
     "trust": {"max_depth": 4, "n_estimators": 160},
 }
@@ -94,7 +106,9 @@ def split_groups(X, y, filenames, rotation_deg):
     gss2 = GroupShuffleSplit(n_splits=1, test_size=0.5, random_state=43)
     cal_idx, test_idx = next(gss2.split(rest_idx, groups=groups[rest_idx]))
     cal_idx, test_idx = rest_idx[cal_idx], rest_idx[test_idx]
-    print(f"Train: {len(train_idx)}, Cal: {len(cal_idx)}, Test: {len(test_idx)} (by base image)")
+    print(
+        f"Train: {len(train_idx)}, Cal: {len(cal_idx)}, Test: {len(test_idx)} (by base image)"
+    )
     return train_idx, cal_idx, test_idx
 
 
@@ -123,7 +137,9 @@ def train_models(X_train, y_train):
         )
         model.fit(X_train, y_train[:, i])
         models.append(model)
-        print(f"  {name}: {model.n_estimators} trees, pos_weight={scale_pos_weight:.1f}")
+        print(
+            f"  {name}: {model.n_estimators} trees, pos_weight={scale_pos_weight:.1f}"
+        )
     return models
 
 
@@ -162,8 +178,11 @@ def rotation_metrics(X, y, rotation_deg, P, tag, filenames=None):
     rot_pred = ((180.0 - axis_deg) % 180.0) + 180.0 * flip_pred
     # True content rotation: applied angle + 180 if the source is stored
     # upside down (the corrected flip label carries that orientation).
-    src_down = (source_down_by_base(filenames, y) if filenames is not None
-                else np.zeros(len(y), dtype=bool))
+    src_down = (
+        source_down_by_base(filenames, y)
+        if filenames is not None
+        else np.zeros(len(y), dtype=bool)
+    )
     true_rot = (rotation_deg + 180.0 * src_down) % 360.0
     err = circular_err(rot_pred, true_rot)
 
@@ -195,10 +214,17 @@ def trait_metrics(y, P, tag):
         yp = (P[i] >= 0.5).astype(int)
         auc = roc_auc_score(y[:, i], P[i])
         precision, recall, f1, _ = precision_recall_fscore_support(
-            y[:, i], yp, average="binary", zero_division=0)
-        metrics[name] = {"auc": float(auc), "precision": float(precision),
-                         "recall": float(recall), "f1": float(f1)}
-        print(f"  {name}: AUC={auc:.4f}, P={precision:.3f}, R={recall:.3f}, F1={f1:.3f}")
+            y[:, i], yp, average="binary", zero_division=0
+        )
+        metrics[name] = {
+            "auc": float(auc),
+            "precision": float(precision),
+            "recall": float(recall),
+            "f1": float(f1),
+        }
+        print(
+            f"  {name}: AUC={auc:.4f}, P={precision:.3f}, R={recall:.3f}, F1={f1:.3f}"
+        )
     return metrics
 
 
@@ -209,8 +235,11 @@ def calibrate_tau(X_cal, y_cal, rotation_cal, P_cal, filenames_cal=None):
     trust_p = P_cal[6]
     flip_pred = (flip_p >= 0.5).astype(int)
     rot_pred = ((180.0 - axis_deg) % 180.0) + 180.0 * flip_pred
-    src_down = (source_down_by_base(filenames_cal, y_cal) if filenames_cal is not None
-                else np.zeros(len(y_cal), dtype=bool))
+    src_down = (
+        source_down_by_base(filenames_cal, y_cal)
+        if filenames_cal is not None
+        else np.zeros(len(y_cal), dtype=bool)
+    )
     true_rot = (rotation_cal + 180.0 * src_down) % 360.0
     err = circular_err(rot_pred, true_rot)
     conf = trust_p * np.maximum(flip_p, 1.0 - flip_p)
@@ -222,16 +251,31 @@ def calibrate_tau(X_cal, y_cal, rotation_cal, P_cal, filenames_cal=None):
         attempted = conf >= tau
         review_rate = float(1.0 - attempted.mean())
         if attempted.sum() == 0:
-            rows.append({"tau": tau_f, "review_rate": review_rate, "accepted_flip_rate": 0.0,
-                         "mae_attempted": float("inf"), "coverage": 0.0})
+            rows.append(
+                {
+                    "tau": tau_f,
+                    "review_rate": review_rate,
+                    "accepted_flip_rate": 0.0,
+                    "mae_attempted": float("inf"),
+                    "coverage": 0.0,
+                }
+            )
             continue
         accepted_flip = float(np.mean(err[attempted] > 90.0))
         mae = float(np.mean(err[attempted]))
-        rows.append({"tau": tau_f, "review_rate": review_rate,
-                     "accepted_flip_rate": accepted_flip, "mae_attempted": mae,
-                     "coverage": float(attempted.mean())})
-        print(f"  tau={tau:.2f} review={review_rate*100:5.1f}% "
-              f"accepted_flip={accepted_flip*100:.3f}% mae={mae:.3f}")
+        rows.append(
+            {
+                "tau": tau_f,
+                "review_rate": review_rate,
+                "accepted_flip_rate": accepted_flip,
+                "mae_attempted": mae,
+                "coverage": float(attempted.mean()),
+            }
+        )
+        print(
+            f"  tau={tau:.2f} review={review_rate * 100:5.1f}% "
+            f"accepted_flip={accepted_flip * 100:.3f}% mae={mae:.3f}"
+        )
 
     # largest tau with accepted-flip <= 0.1% (goal 0) and review rate <= 20%
     chosen = None
@@ -264,8 +308,10 @@ def export_merged_model(models, output_path, tau):
     with open(output_path, "w") as f:
         json.dump(manifest, f)
     size_kb = os.path.getsize(output_path) / 1024
-    print(f"\nExported {len(all_trees)} trees -> {output_path} ({size_kb:.0f} KB), "
-          f"tau={tau}, trees_per_label={trees_per_label}")
+    print(
+        f"\nExported {len(all_trees)} trees -> {output_path} ({size_kb:.0f} KB), "
+        f"tau={tau}, trees_per_label={trees_per_label}"
+    )
 
 
 def main():
@@ -289,24 +335,53 @@ def main():
         "train": trait_metrics(y[train_idx], P_train, "train"),
         "cal": trait_metrics(y[cal_idx], P_cal, "cal"),
         "test": trait_metrics(y[test_idx], P_test, "test"),
-        "rotation_train": rotation_metrics(X[train_idx], y[train_idx], rotation_deg[train_idx], P_train, "train", filenames[train_idx]),
-        "rotation_cal": rotation_metrics(X[cal_idx], y[cal_idx], rotation_deg[cal_idx], P_cal, "cal", filenames[cal_idx]),
-        "rotation_test": rotation_metrics(X[test_idx], y[test_idx], rotation_deg[test_idx], P_test, "test", filenames[test_idx]),
+        "rotation_train": rotation_metrics(
+            X[train_idx],
+            y[train_idx],
+            rotation_deg[train_idx],
+            P_train,
+            "train",
+            filenames[train_idx],
+        ),
+        "rotation_cal": rotation_metrics(
+            X[cal_idx],
+            y[cal_idx],
+            rotation_deg[cal_idx],
+            P_cal,
+            "cal",
+            filenames[cal_idx],
+        ),
+        "rotation_test": rotation_metrics(
+            X[test_idx],
+            y[test_idx],
+            rotation_deg[test_idx],
+            P_test,
+            "test",
+            filenames[test_idx],
+        ),
     }
 
-    rows, chosen = calibrate_tau(X[cal_idx], y[cal_idx], rotation_deg[cal_idx], P_cal, filenames[cal_idx])
+    rows, chosen = calibrate_tau(
+        X[cal_idx], y[cal_idx], rotation_deg[cal_idx], P_cal, filenames[cal_idx]
+    )
     report["tau_sweep"] = rows
     report["chosen_tau"] = chosen
     if chosen is not None:
-        print(f"\nChosen tau = {chosen['tau']:.2f} "
-              f"(accepted_flip={chosen['accepted_flip_rate']*100:.3f}%, "
-              f"review={chosen['review_rate']*100:.1f}%)")
+        print(
+            f"\nChosen tau = {chosen['tau']:.2f} "
+            f"(accepted_flip={chosen['accepted_flip_rate'] * 100:.3f}%, "
+            f"review={chosen['review_rate'] * 100:.1f}%)"
+        )
         pinned_tau = float(chosen["tau"])
     else:
-        print("\nNo tau met the accepted-flip <= 0.1% + review <= 20% bar "
-              "(Path B trigger: quantized vision encoder)")
+        print(
+            "\nNo tau met the accepted-flip <= 0.1% + review <= 20% bar "
+            "(Path B trigger: quantized vision encoder)"
+        )
         pinned_tau = 0.90
-        print(f"Pinning conservative tau={pinned_tau} so the WASM manifest stays loadable")
+        print(
+            f"Pinning conservative tau={pinned_tau} so the WASM manifest stays loadable"
+        )
     report["pinned_tau"] = pinned_tau
 
     export_merged_model(models, args.output, pinned_tau)

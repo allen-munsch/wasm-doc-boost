@@ -576,7 +576,7 @@ mod tests {
             .unwrap()
             .as_f64()
             .unwrap();
-        assert!(deg >= 0.0 && deg < 360.0, "rotation_deg={deg}");
+        assert!((0.0..360.0).contains(&deg), "rotation_deg={deg}");
 
         let conf = js_sys::Reflect::get(&result, &JsValue::from_str("rotation_confidence"))
             .unwrap()

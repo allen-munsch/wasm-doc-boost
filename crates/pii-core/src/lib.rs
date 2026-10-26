@@ -132,28 +132,28 @@ pub fn scan(text: &str) -> Vec<Hit> {
     // in the same region (e.g., ZIP code inside an address block).
     let mut deduped: Vec<Hit> = Vec::new();
     for hit in hits {
-        if let Some(last) = deduped.last_mut() {
-            if hit.start < last.end {
-                // Same kind: keep the one with more text
-                if hit.kind == last.kind {
-                    if hit.text.len() > last.text.len() {
-                        *last = hit;
-                    }
-                    continue;
+        if let Some(last) = deduped.last_mut()
+            && hit.start < last.end
+        {
+            // Same kind: keep the one with more text
+            if hit.kind == last.kind {
+                if hit.text.len() > last.text.len() {
+                    *last = hit;
                 }
-                // PAN vs SSN: PAN wins
-                if (hit.kind == HitKind::Pan && last.kind == HitKind::Ssn)
-                    || (last.kind == HitKind::Pan && hit.kind == HitKind::Ssn)
-                {
-                    if hit.kind == HitKind::Pan {
-                        *last = hit;
-                    }
-                    continue;
-                }
-                // Different kinds: keep both (ZIP inside Address, Phone in Name block, etc.)
-                deduped.push(hit);
                 continue;
             }
+            // PAN vs SSN: PAN wins
+            if (hit.kind == HitKind::Pan && last.kind == HitKind::Ssn)
+                || (last.kind == HitKind::Pan && hit.kind == HitKind::Ssn)
+            {
+                if hit.kind == HitKind::Pan {
+                    *last = hit;
+                }
+                continue;
+            }
+            // Different kinds: keep both (ZIP inside Address, Phone in Name block, etc.)
+            deduped.push(hit);
+            continue;
         }
         deduped.push(hit);
     }

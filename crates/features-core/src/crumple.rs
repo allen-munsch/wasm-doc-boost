@@ -18,16 +18,16 @@ pub fn lbp_variance(gray: &[f64], width: usize, height: usize) -> Vec<f64> {
 
     for y in 1..height as isize - 1 {
         for x in 1..width as isize - 1 {
-            let center = pixel_at(&gray, width, height, x, y);
+            let center = pixel_at(gray, width, height, x, y);
             let neighbors = [
-                pixel_at(&gray, width, height, x, y - 1),
-                pixel_at(&gray, width, height, x + 1, y - 1),
-                pixel_at(&gray, width, height, x + 1, y),
-                pixel_at(&gray, width, height, x + 1, y + 1),
-                pixel_at(&gray, width, height, x, y + 1),
-                pixel_at(&gray, width, height, x - 1, y + 1),
-                pixel_at(&gray, width, height, x - 1, y),
-                pixel_at(&gray, width, height, x - 1, y - 1),
+                pixel_at(gray, width, height, x, y - 1),
+                pixel_at(gray, width, height, x + 1, y - 1),
+                pixel_at(gray, width, height, x + 1, y),
+                pixel_at(gray, width, height, x + 1, y + 1),
+                pixel_at(gray, width, height, x, y + 1),
+                pixel_at(gray, width, height, x - 1, y + 1),
+                pixel_at(gray, width, height, x - 1, y),
+                pixel_at(gray, width, height, x - 1, y - 1),
             ];
 
             // Local variance in 3x3 neighborhood
@@ -113,10 +113,10 @@ pub fn edge_density_std(gray: &[f64], width: usize, height: usize) -> f64 {
             for y in start_y..end_y {
                 for x in start_x..end_x {
                     if x > 0 && x < width - 1 && y > 0 && y < height - 1 {
-                        let gx = pixel_at(&gray, width, height, x as isize + 1, y as isize)
-                            - pixel_at(&gray, width, height, x as isize - 1, y as isize);
-                        let gy = pixel_at(&gray, width, height, x as isize, y as isize + 1)
-                            - pixel_at(&gray, width, height, x as isize, y as isize - 1);
+                        let gx = pixel_at(gray, width, height, x as isize + 1, y as isize)
+                            - pixel_at(gray, width, height, x as isize - 1, y as isize);
+                        let gy = pixel_at(gray, width, height, x as isize, y as isize + 1)
+                            - pixel_at(gray, width, height, x as isize, y as isize - 1);
                         let mag = sqrt(gx * gx + gy * gy);
                         if mag > 20.0 {
                             edge_count += 1;

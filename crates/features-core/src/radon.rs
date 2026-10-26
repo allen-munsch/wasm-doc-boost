@@ -66,7 +66,7 @@ fn border_median(gray: &[f64], width: usize, height: usize) -> f64 {
             samples.push(gray[y * width + x]);
         }
     }
-    for y in (height - t.min(height)).max(0)..height {
+    for y in (height - t.min(height))..height {
         for x in 0..width {
             samples.push(gray[y * width + x]);
         }
@@ -75,7 +75,7 @@ fn border_median(gray: &[f64], width: usize, height: usize) -> f64 {
         for x in 0..t.min(width) {
             samples.push(gray[y * width + x]);
         }
-        for x in (width - t.min(width)).max(0)..width {
+        for x in (width - t.min(width))..width {
             samples.push(gray[y * width + x]);
         }
     }
@@ -98,7 +98,7 @@ fn projection_variance_at(gray: &[f64], width: usize, height: usize, deg: f64) -
     let mut row_sums = vec![0.0f64; height];
     let mut total = 0.0;
 
-    for y in 0..height {
+    for (y, slot) in row_sums.iter_mut().enumerate() {
         let yc = y as f64 - cy;
         let mut row_sum = 0.0;
         for x in 0..width {
@@ -115,14 +115,14 @@ fn projection_variance_at(gray: &[f64], width: usize, height: usize, deg: f64) -
             let yi = (ys + 0.5).clamp(0.0, height as f64 - 1.0) as usize;
             row_sum += gray[yi * width + xi];
         }
-        row_sums[y] = row_sum;
+        *slot = row_sum;
         total += row_sum;
     }
 
     let mean = total / n;
     let mut var = 0.0;
-    for y in 0..height {
-        let row_mean = row_sums[y] / width as f64;
+    for &row_sum in row_sums.iter() {
+        let row_mean = row_sum / width as f64;
         let d = row_mean - mean;
         var += d * d;
     }

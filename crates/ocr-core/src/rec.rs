@@ -313,7 +313,7 @@ pub fn run_recognition(
     for t in 0..timesteps {
         let mut row = Vec::with_capacity(num_classes);
         let base = t * num_classes;
-        for c in 0..num_classes as usize {
+        for c in 0..num_classes {
             row.push(output_slice[base + c]);
         }
         result.push(row);

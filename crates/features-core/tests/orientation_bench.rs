@@ -120,7 +120,7 @@ fn orientation_benchmark_real_invoices() {
             let pgm = fs::read(format!("{base}/doc{doc}_r{a:03}.pgm")).unwrap();
             let ppm = fs::read(format!("{base}/doc{doc}_r{a:03}.ppm")).unwrap();
             let (gray_bytes, w, h) = parse_pgm(&pgm).unwrap();
-            let gray: Vec<f64> = gray_bytes.iter().map(|&b| b as f64).collect();
+            let gray: Vec<f64> = gray_bytes.to_vec();
             let (rgb, _w2, _h2) = parse_ppm(&ppm).unwrap();
             // PIL rotates CCW by `a`; in image coords (y down) that is a
             // rotation of -a, so the text-line axis (mod 180) is 180 - a.

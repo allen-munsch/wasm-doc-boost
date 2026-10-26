@@ -60,14 +60,14 @@ impl LayoutEngine {
     /// * height: `int`
     /// * Returns: `list[dict]` — each dict has `label`, `score`, `x1`, `y1`,
     ///   `x2`, `y2` (bounding box in original-image coordinates).
-    fn detect(&mut self, pixels: Vec<u8>, width: usize, height: usize) -> PyResult<PyObject> {
+    fn detect(&mut self, pixels: Vec<u8>, width: usize, height: usize) -> PyResult<Py<PyAny>> {
         let image = decode_rgb(pixels, width, height)?;
         let regions = self
             .inner
             .detect(&image)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
 
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let list = PyList::empty(py);
             for r in regions {
                 let d = PyDict::new(py);
@@ -79,7 +79,7 @@ impl LayoutEngine {
                 d.set_item("y2", r.y2)?;
                 list.append(d)?;
             }
-            Ok(list.into())
+            Ok(list.unbind().into_any())
         })
     }
 }
@@ -123,14 +123,14 @@ impl OcrEngine {
     ///
     /// * Returns: `list[dict]` — each dict has `confidence` and `bbox`
     ///   (a list of four `[x, y]` corners).
-    fn detect(&self, pixels: Vec<u8>, width: usize, height: usize) -> PyResult<PyObject> {
+    fn detect(&self, pixels: Vec<u8>, width: usize, height: usize) -> PyResult<Py<PyAny>> {
         let image = decode_rgb(pixels, width, height)?;
         let regions = self
             .inner
             .detect_text_regions(&image)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
 
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let list = PyList::empty(py);
             for r in regions {
                 let d = PyDict::new(py);
@@ -145,7 +145,7 @@ impl OcrEngine {
                 d.set_item("bbox", bbox)?;
                 list.append(d)?;
             }
-            Ok(list.into())
+            Ok(list.unbind().into_any())
         })
     }
 
@@ -156,14 +156,14 @@ impl OcrEngine {
     /// * height: `int`
     /// * Returns: `list[dict]` — each dict has `text`, `confidence`, `x`, `y`,
     ///   `width`, `height` (sorted top-to-bottom, left-to-right).
-    fn recognize(&self, pixels: Vec<u8>, width: usize, height: usize) -> PyResult<PyObject> {
+    fn recognize(&self, pixels: Vec<u8>, width: usize, height: usize) -> PyResult<Py<PyAny>> {
         let image = decode_rgb(pixels, width, height)?;
         let blocks = self
             .inner
             .recognize_all(&image, OrderBy::Horizontal)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
 
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let list = PyList::empty(py);
             for b in blocks {
                 let d = PyDict::new(py);
@@ -175,7 +175,7 @@ impl OcrEngine {
                 d.set_item("height", b.height)?;
                 list.append(d)?;
             }
-            Ok(list.into())
+            Ok(list.unbind().into_any())
         })
     }
 }
@@ -217,14 +217,14 @@ impl PiiEngine {
     ///   `"driver_license"`, `"passport"`)
     /// * Returns: `list[dict]` — each dict has `label`, `text`, `score`,
     ///   `start`, `end` (byte offsets in the original text).
-    fn extract(&mut self, text: &str, labels: Vec<String>) -> PyResult<PyObject> {
+    fn extract(&mut self, text: &str, labels: Vec<String>) -> PyResult<Py<PyAny>> {
         let tasks = vec![SchemaTask::Entities(labels)];
         let output = self
             .inner
             .extract(text, &tasks)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
 
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let list = PyList::empty(py);
             for e in output.entities {
                 let d = PyDict::new(py);
@@ -235,7 +235,7 @@ impl PiiEngine {
                 d.set_item("end", e.char_end as u64)?;
                 list.append(d)?;
             }
-            Ok(list.into())
+            Ok(list.unbind().into_any())
         })
     }
 }

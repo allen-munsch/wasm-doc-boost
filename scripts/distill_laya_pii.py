@@ -26,13 +26,12 @@ Run with the vendored source on the path:
 import argparse
 import os
 import random
-import sys
 import time
 
 import numpy as np
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
+from torch import nn
 
 QTYPE_NOUL = 2
 
@@ -47,7 +46,7 @@ QUESTION = {
 }
 
 # Reuse the synthetic / ai4privacy data builders from the training script.
-from train_laya_pii import make_synthetic_pair, target_type_of  # noqa: E402
+from train_laya_pii import make_synthetic_pair, target_type_of
 
 
 class StudentClassifier(nn.Module):
@@ -59,7 +58,9 @@ class StudentClassifier(nn.Module):
         self.head = nn.Linear(hidden, 2)
 
     def forward(self, input_ids, attention_mask):
-        h = self.encoder(input_ids=input_ids, attention_mask=attention_mask).last_hidden_state
+        h = self.encoder(
+            input_ids=input_ids, attention_mask=attention_mask
+        ).last_hidden_state
         mask = attention_mask.unsqueeze(-1).float()
         pooled = (h * mask).sum(1) / mask.sum(1).clamp_min(1.0)
         return self.head(pooled)
@@ -114,9 +115,8 @@ def iter_pairs(args):
 def load_teacher(teacher_dir, device):
     import json
 
-    from transformers import AutoTokenizer
-
     from laya.common import build_model
+    from transformers import AutoTokenizer
 
     tok = AutoTokenizer.from_pretrained(os.path.join(teacher_dir, "tokenizer"))
     with open(os.path.join(teacher_dir, "rl_agent_config.json")) as f:
@@ -138,7 +138,9 @@ def teacher_batch(teacher, tok_teacher, cfg, texts, device):
     q = {"t": "noul", "ins": QUESTION["instructions"], "crit": {}}
     ids, markers = [], []
     for text in texts:
-        seq, mk = build_sequence(tok_teacher, text, q, cfg["max_len"], cfg["head_max_len"])
+        seq, mk = build_sequence(
+            tok_teacher, text, q, cfg["max_len"], cfg["head_max_len"]
+        )
         ids.append(seq)
         markers.append(mk)
 
@@ -156,9 +158,16 @@ def teacher_batch(teacher, tok_teacher, cfg, texts, device):
         mmask[i, :k] = True
     qtype = torch.full((n,), QTYPE_NOUL, dtype=torch.long)
 
-    with torch.no_grad(), torch.autocast("cuda", dtype=torch.float16, enabled=(device.type == "cuda")):
+    with (
+        torch.no_grad(),
+        torch.autocast("cuda", dtype=torch.float16, enabled=(device.type == "cuda")),
+    ):
         logits, _ = teacher(
-            input_ids.to(device), att.to(device), mpos.to(device), mmask.to(device), qtype.to(device)
+            input_ids.to(device),
+            att.to(device),
+            mpos.to(device),
+            mmask.to(device),
+            qtype.to(device),
         )
     return logits.float().cpu()
 
@@ -186,7 +195,9 @@ def phase_label(args, device):
         for t, l, z in zip(texts, labels, tl):
             rows.append((t, l, z))
 
-    print(f"[label] {len(rows)} pairs labeled in {time.time()-t0:.1f}s; tokenizing student side")
+    print(
+        f"[label] {len(rows)} pairs labeled in {time.time() - t0:.1f}s; tokenizing student side"
+    )
     encs = tok_student(
         [r[0] for r in rows],
         padding=True,
@@ -218,7 +229,9 @@ def phase_train(args, device):
 
     opt = torch.optim.AdamW(student.parameters(), lr=args.lr, weight_decay=0.01)
     total_updates = (n // args.batch) * args.epochs
-    sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=max(1, total_updates), eta_min=1e-6)
+    sched = torch.optim.lr_scheduler.CosineAnnealingLR(
+        opt, T_max=max(1, total_updates), eta_min=1e-6
+    )
 
     T = args.temperature
     alpha = args.alpha  # weight on KL; (1-alpha) on hard CE
@@ -229,7 +242,7 @@ def phase_train(args, device):
         rng.shuffle(idx)
         epoch_loss, steps = 0.0, 0
         for b in range(0, n, args.batch):
-            sel = idx[b:b + args.batch]
+            sel = idx[b : b + args.batch]
             ids = cache["input_ids"][sel].to(device)
             att = cache["attention_mask"][sel].to(device)
             label = cache["label"][sel].to(device)
@@ -238,7 +251,11 @@ def phase_train(args, device):
             s_logits = student(ids, att)
             p_t = F.softmax(t_logits / T, -1)
             log_p_s = F.log_softmax(s_logits / T, -1)
-            kl = (p_t * (torch.log(p_t.clamp_min(1e-12)) - log_p_s)).sum(-1).mean() * T * T
+            kl = (
+                (p_t * (torch.log(p_t.clamp_min(1e-12)) - log_p_s)).sum(-1).mean()
+                * T
+                * T
+            )
             ce = F.cross_entropy(s_logits, label)
             loss = alpha * kl + (1 - alpha) * ce
 
@@ -251,9 +268,13 @@ def phase_train(args, device):
             epoch_loss += loss.item()
             steps += 1
             if steps % 20 == 0:
-                print(f"  epoch {epoch+1}/{args.epochs} step {steps} loss {loss.item():.4f} "
-                      f"kl {kl.item():.4f} ce {ce.item():.4f}")
-        print(f"=== epoch {epoch+1}/{args.epochs} avg loss {epoch_loss/max(1,steps):.4f} ===")
+                print(
+                    f"  epoch {epoch + 1}/{args.epochs} step {steps} loss {loss.item():.4f} "
+                    f"kl {kl.item():.4f} ce {ce.item():.4f}"
+                )
+        print(
+            f"=== epoch {epoch + 1}/{args.epochs} avg loss {epoch_loss / max(1, steps):.4f} ==="
+        )
 
     # save student in standard HF format
     os.makedirs(args.output_dir, exist_ok=True)
@@ -267,25 +288,46 @@ def phase_train(args, device):
     texts, labels = [], []
     for _ in range(64):
         pos, neg = make_synthetic_pair()
-        texts.append(pos); labels.append(1)
-        texts.append(neg); labels.append(0)
+        texts.append(pos)
+        labels.append(1)
+        texts.append(neg)
+        labels.append(0)
     correct = 0
     with torch.no_grad():
         for b in range(0, len(texts), 16):
-            enc = tok_student(texts[b:b + 16], padding=True, truncation=True,
-                              max_length=args.student_max_len, return_tensors="pt")
-            logits = student(enc["input_ids"].to(device), enc["attention_mask"].to(device))
-            correct += (logits.argmax(-1).cpu() == torch.tensor(labels[b:b + 16])).sum().item()
-    print(f"[eval] held-out accuracy {correct}/{len(texts)} = {correct/len(texts):.3f}")
+            enc = tok_student(
+                texts[b : b + 16],
+                padding=True,
+                truncation=True,
+                max_length=args.student_max_len,
+                return_tensors="pt",
+            )
+            logits = student(
+                enc["input_ids"].to(device), enc["attention_mask"].to(device)
+            )
+            correct += (
+                (logits.argmax(-1).cpu() == torch.tensor(labels[b : b + 16]))
+                .sum()
+                .item()
+            )
+    print(
+        f"[eval] held-out accuracy {correct}/{len(texts)} = {correct / len(texts):.3f}"
+    )
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--teacher-dir", required=True, help="path to a saved Laya checkpoint")
+    ap.add_argument(
+        "--teacher-dir", required=True, help="path to a saved Laya checkpoint"
+    )
     ap.add_argument("--student-id", default="sentence-transformers/all-MiniLM-L6-v2")
     ap.add_argument("--data", choices=["synthetic", "ai4privacy"], default="synthetic")
-    ap.add_argument("--max-samples", type=int, default=128,
-                    help="cap on pairs (label phase); None = whole dataset")
+    ap.add_argument(
+        "--max-samples",
+        type=int,
+        default=128,
+        help="cap on pairs (label phase); None = whole dataset",
+    )
     ap.add_argument("--phase", choices=["label", "train", "both"], default="both")
     ap.add_argument("--teacher-cache", default="/tmp/laya_teacher_labels.pt")
     ap.add_argument("--output-dir", default="/tmp/laya_student")
@@ -293,7 +335,9 @@ def main():
     ap.add_argument("--epochs", type=int, default=3)
     ap.add_argument("--lr", type=float, default=2e-5)
     ap.add_argument("--temperature", type=float, default=4.0)
-    ap.add_argument("--alpha", type=float, default=0.7, help="weight on KL; (1-alpha) on hard CE")
+    ap.add_argument(
+        "--alpha", type=float, default=0.7, help="weight on KL; (1-alpha) on hard CE"
+    )
     ap.add_argument("--student-max-len", type=int, default=256)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--device", default=None)
@@ -302,7 +346,9 @@ def main():
     random.seed(args.seed)
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
-    device = torch.device(args.device or ("cuda" if torch.cuda.is_available() else "cpu"))
+    device = torch.device(
+        args.device or ("cuda" if torch.cuda.is_available() else "cpu")
+    )
     print(f"[setup] device={device}")
 
     if args.phase in ("label", "both"):

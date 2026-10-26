@@ -118,7 +118,7 @@ fn scan_account(text: &str, hits: &mut Vec<Hit>) {
                     i += 1;
                 }
                 let len = i - start;
-                if len < 6 || len > 20 {
+                if !(6..=20).contains(&len) {
                     continue;
                 }
 
@@ -234,7 +234,7 @@ fn bill_to_hit(text: &str, marker: &str, hits: &mut Vec<Hit>) {
             let name_end = name_pos + name_str.len();
             hits.push(Hit {
                 kind: HitKind::Name,
-                text: String::from(name_str),
+                text: name_str,
                 start: name_pos,
                 end: name_end,
             });

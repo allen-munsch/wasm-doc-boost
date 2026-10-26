@@ -21,11 +21,8 @@ LABEL_NAMES = ["is_document", "is_digital", "is_paper", "is_crumpled", "is_shado
 
 def split_labels(labels_path: str, n_workers: int, tmpdir: str) -> list[str]:
     """Split labels.csv into n_workers chunk files, return their paths."""
-    rows = []
     with open(labels_path, newline="") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            rows.append(row)
+        rows = list(csv.DictReader(f))
 
     chunk_size = (len(rows) + n_workers - 1) // n_workers
     chunks = []
@@ -88,7 +85,9 @@ def merge_npz(outputs: list[str], final_path: str):
         filenames=filenames,
         label_names=np.array(LABEL_NAMES),
     )
-    print(f"Merged {total} samples → {final_path} ({os.path.getsize(final_path) / 1024:.0f} KB)")
+    print(
+        f"Merged {total} samples → {final_path} ({os.path.getsize(final_path) / 1024:.0f} KB)"
+    )
 
 
 def main():
