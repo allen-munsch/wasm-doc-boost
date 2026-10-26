@@ -1,0 +1,26 @@
+[package]
+name = "ocr-core"
+version = "0.2.0"
+edition = "2021"
+description = "ONNX-based OCR engine using PaddleOCR models (vendored from paddleocr_rs_onnx 0.2.7)"
+license = "MIT"
+
+[features]
+default = []
+cuda = ["ort/cuda"]
+directml = ["ort/directml"]
+openvino = ["ort/openvino"]
+nnapi = ["ort/nnapi"]
+coreml = ["ort/coreml"]
+cann = ["ort/cann"]
+
+[dependencies]
+ort = { version = "2.0.0-rc.12", default-features = false, features = ["std", "ndarray", "load-dynamic"] }
+image = "0.25"
+imageproc = "0.27"
+geo = "0.33"
+serde = { version = "1", features = ["derive"] }
+rayon = "1"
+log = "0.4"
+parking_lot = "0.12"
+thiserror = "2.0"

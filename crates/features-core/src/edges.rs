@@ -1,7 +1,7 @@
+use crate::pixel_at;
 use alloc::vec;
 use alloc::vec::Vec;
 use libm::{atan2, cos, sin, sqrt};
-use crate::pixel_at;
 
 /// Precomputed Sobel gradients for a single image.
 /// Computed in one pass — share across all edge feature functions.
@@ -225,11 +225,11 @@ pub fn laplacian_variance(gray: &[f64], width: usize, height: usize) -> f64 {
 
     for y in 0..height as isize {
         for x in 0..width as isize {
-            let lap = pixel_at(&gray, width, height, x, y) * 4.0
-                - pixel_at(&gray, width, height, x - 1, y)
-                - pixel_at(&gray, width, height, x + 1, y)
-                - pixel_at(&gray, width, height, x, y - 1)
-                - pixel_at(&gray, width, height, x, y + 1);
+            let lap = pixel_at(gray, width, height, x, y) * 4.0
+                - pixel_at(gray, width, height, x - 1, y)
+                - pixel_at(gray, width, height, x + 1, y)
+                - pixel_at(gray, width, height, x, y - 1)
+                - pixel_at(gray, width, height, x, y + 1);
 
             let i = (y as usize * width + x as usize) as f64;
             let delta = lap - sum;
@@ -273,8 +273,8 @@ pub fn edge_direction_histogram(sobel: &SobelResult) -> Vec<f64> {
 
     for (i, &mag) in mags.iter().enumerate() {
         if mag > mean_mag {
-            let bin = ((oris[i] + core::f64::consts::PI) / (2.0 * core::f64::consts::PI) * 8.0)
-                as usize;
+            let bin =
+                ((oris[i] + core::f64::consts::PI) / (2.0 * core::f64::consts::PI) * 8.0) as usize;
             let bin = bin.min(7);
             bins[bin] += 1;
         }
@@ -307,8 +307,7 @@ pub fn hv_edge_ratio(sobel: &SobelResult) -> f64 {
             abs_angle
         };
 
-        if angle < angle_threshold
-            || (core::f64::consts::FRAC_PI_2 - angle).abs() < angle_threshold
+        if angle < angle_threshold || (core::f64::consts::FRAC_PI_2 - angle).abs() < angle_threshold
         {
             hv_sum += mag;
         } else if (angle - core::f64::consts::FRAC_PI_4).abs()
@@ -410,12 +409,7 @@ pub fn sobel_circular_stats(sobel: &SobelResult) -> Vec<f64> {
 }
 
 /// Non-max suppression: thin edges to 1-pixel width.
-fn non_max_suppression(
-    mags: &[f64],
-    oris: &[f64],
-    width: usize,
-    height: usize,
-) -> Vec<f64> {
+fn non_max_suppression(mags: &[f64], oris: &[f64], width: usize, height: usize) -> Vec<f64> {
     let n = width * height;
     let mut result = vec![0.0; n];
 
@@ -424,9 +418,9 @@ fn non_max_suppression(
             let idx = y as usize * width + x as usize;
             let angle = oris[idx];
             // Quantize to 4 directions: 0°, 45°, 90°, 135°
-            let dir =
-                ((angle + core::f64::consts::PI) / (core::f64::consts::PI / 4.0) + 0.5) as usize
-                    % 4;
+            let dir = ((angle + core::f64::consts::PI) / (core::f64::consts::PI / 4.0) + 0.5)
+                as usize
+                % 4;
 
             let (n1, n2) = match dir {
                 0 => {
@@ -481,16 +475,16 @@ fn otsu_threshold(values: &[f64]) -> f64 {
 
     let total = values.len() as f64;
     let mut sum = 0.0;
-    for i in 0..n_bins {
-        sum += (min_val + (i as f64 + 0.5) * bin_width) * hist[i] as f64;
+    for (i, &h) in hist.iter().enumerate().take(n_bins) {
+        sum += (min_val + (i as f64 + 0.5) * bin_width) * h as f64;
     }
 
     let mut best_thresh = min_val;
     let mut best_variance = 0.0;
     let mut w_b = 0.0;
     let mut sum_b = 0.0;
-    for i in 0..n_bins {
-        w_b += hist[i] as f64;
+    for (i, &h) in hist.iter().enumerate().take(n_bins) {
+        w_b += h as f64;
         if w_b < 1.0 {
             continue;
         }
@@ -498,7 +492,7 @@ fn otsu_threshold(values: &[f64]) -> f64 {
         if w_f < 1.0 {
             break;
         }
-        sum_b += (min_val + (i as f64 + 0.5) * bin_width) * hist[i] as f64;
+        sum_b += (min_val + (i as f64 + 0.5) * bin_width) * h as f64;
         let m_b = sum_b / w_b;
         let m_f = (sum - sum_b) / w_f;
         let between = w_b * w_f * (m_b - m_f) * (m_b - m_f);
@@ -512,7 +506,7 @@ fn otsu_threshold(values: &[f64]) -> f64 {
 }
 
 fn percentile(values: &[f64], p: f64) -> f64 {
-    let mut sorted: Vec<f64> = values.iter().cloned().collect();
+    let mut sorted: Vec<f64> = values.to_vec();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(core::cmp::Ordering::Equal));
     let idx = (sorted.len() as f64 * p) as usize;
     let idx = idx.min(sorted.len() - 1);

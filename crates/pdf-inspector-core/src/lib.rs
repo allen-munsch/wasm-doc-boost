@@ -9,23 +9,17 @@
 //! # Quick start
 //!
 //! ```no_run
-//! // Full processing (detect + extract + markdown) with defaults
-//! let result = pdf_inspector::process_pdf("document.pdf").unwrap();
+//! use pdf_inspector_core::{classify_pdf_mem, detect_pdf_type_mem};
+//!
+//! let bytes = std::fs::read("document.pdf").unwrap();
+//!
+//! // Lightweight routing classification (detect + OCR page list)
+//! let result = classify_pdf_mem(&bytes).unwrap();
 //! println!("type: {:?}, pages: {}", result.pdf_type, result.page_count);
-//! if let Some(md) = &result.markdown {
-//!     println!("{md}");
-//! }
 //!
-//! // Fast metadata-only detection (no text extraction)
-//! let info = pdf_inspector::detect_pdf("document.pdf").unwrap();
+//! // Metadata-only detection with sampling detail
+//! let info = detect_pdf_type_mem(&bytes).unwrap();
 //! println!("type: {:?}, pages: {}", info.pdf_type, info.page_count);
-//!
-//! // Custom options via builder
-//! use pdf_inspector::{PdfOptions, ProcessMode};
-//! let result = pdf_inspector::process_pdf_with_options(
-//!     "document.pdf",
-//!     PdfOptions::new().mode(ProcessMode::Analyze),
-//! ).unwrap();
 //! ```
 
 pub mod adobe_korea1;
@@ -48,11 +42,10 @@ pub use extractor::{
 pub use process_mode::ProcessMode;
 pub use types::{PdfLine, PdfRect, TextItem};
 
-use lopdf::Document;
 use log::debug;
+use lopdf::Document;
 use std::borrow::Cow;
 use std::path::Path;
-
 
 /// OCR reason emitted when the extracted text layer appears garbled due to
 /// broken font decoding or mojibake.
@@ -70,12 +63,9 @@ pub const OCR_REASON_NO_TEXT: &str = "no_text";
 /// rather than real text operators, so it cannot be extracted as characters.
 pub const OCR_REASON_VECTOR_TEXT: &str = "vector_text";
 
-
-
 // =============================================================================
 // PdfClassification
 // =============================================================================
-
 
 /// Lightweight classification result for routing decisions.
 #[derive(Debug)]
@@ -505,7 +495,6 @@ fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
     find_bytes(haystack, needle).is_some()
 }
-
 
 /// Detect markdown tables with suspicious structure that suggest the heuristic
 /// missed/mangled rows or columns. Returns true when the caller should treat

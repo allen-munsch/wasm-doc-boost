@@ -32,6 +32,15 @@ LABEL_NAMES = [
     "rotation_180",
     "rotation_270",
 ]
+V2_LABEL_NAMES = [
+    "is_document",
+    "is_digital",
+    "is_paper",
+    "is_crumpled",
+    "is_shadow",
+    "flip",
+    "trust",
+]
 
 
 def chunk_list(lst, n):
@@ -46,6 +55,7 @@ def main():
     parser.add_argument("--labels", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--workers", type=int, default=0)
+    parser.add_argument("--v2", action="store_true", help="per-degree rework export")
     args = parser.parse_args()
 
     # Load filenames from CSV
@@ -69,21 +79,20 @@ def main():
         chunk_file = os.path.join(tmpdir, f"chunk_{i:04d}.npz")
         chunk_files.append(chunk_file)
 
-        proc = subprocess.Popen(
-            [
-                sys.executable,
-                "-u",
-                "scripts/export_worker.py",
-                "--images",
-                args.images,
-                "--labels-csv",
-                args.labels,
-                "--output",
-                chunk_file,
-            ],
-            stdin=subprocess.PIPE,
-            text=True,
-        )
+        cmd = [
+            sys.executable,
+            "-u",
+            "scripts/export_worker.py",
+            "--images",
+            args.images,
+            "--labels-csv",
+            args.labels,
+            "--output",
+            chunk_file,
+        ]
+        if args.v2:
+            cmd.append("--v2")
+        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, text=True)
         proc.stdin.write("\n".join(chunk) + "\n")
         proc.stdin.close()
         procs.append((i, proc))
@@ -103,6 +112,7 @@ def main():
     all_features = []
     all_labels = []
     all_filenames = []
+    all_angles = []
 
     for chunk_file in chunk_files:
         if not os.path.exists(chunk_file):
@@ -112,18 +122,31 @@ def main():
         all_features.append(data["features"])
         all_labels.append(data["labels"])
         all_filenames.append(data["filenames"])
+        if args.v2:
+            all_angles.append(data["rotation_deg"])
 
     features = np.concatenate(all_features, axis=0)
     labels_arr = np.concatenate(all_labels, axis=0)
     filenames_arr = np.concatenate(all_filenames, axis=0)
 
-    np.savez_compressed(
-        args.output,
-        features=features,
-        labels=labels_arr,
-        filenames=filenames_arr,
-        label_names=np.array(LABEL_NAMES),
-    )
+    if args.v2:
+        angles_arr = np.concatenate(all_angles, axis=0)
+        np.savez_compressed(
+            args.output,
+            features=features,
+            labels=labels_arr,
+            filenames=filenames_arr,
+            rotation_deg=angles_arr,
+            label_names=np.array(V2_LABEL_NAMES),
+        )
+    else:
+        np.savez_compressed(
+            args.output,
+            features=features,
+            labels=labels_arr,
+            filenames=filenames_arr,
+            label_names=np.array(LABEL_NAMES),
+        )
     file_size = os.path.getsize(args.output)
     print(
         f"Written {args.output}: {features.shape} features, {labels_arr.shape} labels ({file_size / 1024:.0f} KB)"

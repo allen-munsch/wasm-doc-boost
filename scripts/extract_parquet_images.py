@@ -45,7 +45,7 @@ def extract_cordv2(data_dir: str, out_dir: str, max_images: int | None = None) -
                     fname = f"cordv2_{pq_path.stem}_{idx}.jpg"
                     img.save(os.path.join(out_dir, fname), quality=95)
                     count += 1
-                except Exception as e:
+                except (OSError, ValueError) as e:
                     print(f"    Skipping row {idx}: {e}")
 
             if max_images and count >= max_images:
@@ -57,7 +57,9 @@ def extract_cordv2(data_dir: str, out_dir: str, max_images: int | None = None) -
     return count
 
 
-def extract_publaynet(data_dir: str, out_dir: str, max_images: int | None = None) -> int:
+def extract_publaynet(
+    data_dir: str, out_dir: str, max_images: int | None = None
+) -> int:
     """Extract images from PubLayNet HF parquet files."""
     parquet_dir = os.path.join(data_dir, "data")
     pq_files = sorted(Path(parquet_dir).glob("*.parquet"))
@@ -87,8 +89,8 @@ def extract_publaynet(data_dir: str, out_dir: str, max_images: int | None = None
                     fname = f"publaynet_{pq_path.stem}_{idx}.jpg"
                     img.save(os.path.join(out_dir, fname), quality=95)
                     count += 1
-                except Exception:
-                    pass
+                except (OSError, ValueError) as e:
+                    print(f"    Skipping row {idx}: {e}")
 
             if max_images and count >= max_images:
                 break
@@ -100,7 +102,9 @@ def extract_publaynet(data_dir: str, out_dir: str, max_images: int | None = None
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Extract images from HF parquet datasets")
+    parser = argparse.ArgumentParser(
+        description="Extract images from HF parquet datasets"
+    )
     parser.add_argument(
         "--dataset",
         choices=["cord-v2", "publaynet", "all"],
@@ -108,8 +112,12 @@ def main():
         help="Which dataset to extract",
     )
     parser.add_argument("--data-dir", default="data", help="Base data directory")
-    parser.add_argument("--out-dir", default="data/images", help="Output image directory")
-    parser.add_argument("--max-images", type=int, default=None, help="Max images per dataset")
+    parser.add_argument(
+        "--out-dir", default="data/images", help="Output image directory"
+    )
+    parser.add_argument(
+        "--max-images", type=int, default=None, help="Max images per dataset"
+    )
     args = parser.parse_args()
 
     datasets = ["cord-v2", "publaynet"] if args.dataset == "all" else [args.dataset]

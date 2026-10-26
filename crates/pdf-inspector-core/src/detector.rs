@@ -1064,7 +1064,6 @@ fn embedded_font_has_cmap(doc: &Document, font_ref: lopdf::ObjectId) -> bool {
     false
 }
 
-
 /// Check if the page has at least one font that can produce decodable Unicode text.
 ///
 /// Returns true when any font on the page has:
@@ -1712,7 +1711,6 @@ pub(crate) fn analyze_page_images(doc: &Document, page_id: ObjectId) -> (bool, u
     (has_images, total_area, has_template_image)
 }
 
-
 /// Recursively collect image dimensions from XObject resources,
 /// including images nested inside Form XObjects.
 fn collect_images_from_resources(
@@ -1816,7 +1814,9 @@ fn get_document_title(doc: &Document) -> Option<String> {
             // Handle UTF-16BE encoding (BOM: 0xFE 0xFF)
             if bytes.len() >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF {
                 let utf16: Vec<u16> = bytes[2..]
-                    .chunks_exact(2)
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
                     .map(|chunk| u16::from_be_bytes([chunk[0], chunk[1]]))
                     .collect();
                 Some(String::from_utf16_lossy(&utf16))
@@ -2696,8 +2696,8 @@ mod tests {
         let mut fonts = HashSet::new();
         let content = b"BT /F1 12 Tf (Hello) Tj /F2 10 Tf (World) Tj ET";
         scan_content_for_text_operators(content, &mut uchars, &mut fonts);
-        assert!(fonts.contains(&b"F1".to_vec()), "should collect F1");
-        assert!(fonts.contains(&b"F2".to_vec()), "should collect F2");
+        assert!(fonts.contains(b"F1".as_slice()), "should collect F1");
+        assert!(fonts.contains(b"F2".as_slice()), "should collect F2");
         assert_eq!(fonts.len(), 2);
     }
 

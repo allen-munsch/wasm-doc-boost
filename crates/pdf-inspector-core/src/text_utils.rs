@@ -57,7 +57,6 @@ pub(crate) fn is_explicit_page_number_expression(text: &str) -> bool {
     }
 }
 
-
 /// Check if a character is CJK (Chinese, Japanese, Korean).
 /// CJK languages don't use spaces between words, so word-boundary
 /// heuristics should not apply when CJK characters are involved.
@@ -296,7 +295,9 @@ pub(crate) fn decode_text_string(bytes: &[u8]) -> String {
     if bytes.len() >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF {
         // UTF-16BE with BOM
         let utf16: Vec<u16> = bytes[2..]
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|chunk| u16::from_be_bytes([chunk[0], chunk[1]]))
             .collect();
         String::from_utf16_lossy(&utf16)

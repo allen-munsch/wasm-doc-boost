@@ -158,7 +158,6 @@ pub(crate) fn extract_positioned_text_from_doc(
     extract_positioned_text_impl(doc, font_cmaps, page_filter, false, None)
 }
 
-
 fn extract_positioned_text_impl(
     doc: &Document,
     font_cmaps: &FontCMaps,
@@ -1094,11 +1093,11 @@ mod tests {
         // break): the split must land between the modes. Needs >=4 gaps to
         // enter the bimodal tier — short runs use the strict uniform gate.
         let mut items = glyph_run("ITISOK", 100.0, 8.0, 2.3);
-        for i in 2..6 {
-            items[i].x += 2.8; // word gap at T|I
+        for item in items.iter_mut().take(6).skip(2) {
+            item.x += 2.8; // word gap at T|I
         }
-        for i in 4..6 {
-            items[i].x += 2.8; // word gap at S|O
+        for item in items.iter_mut().take(6).skip(4) {
+            item.x += 2.8; // word gap at S|O
         }
         let merged = merge_text_items(items);
         assert_eq!(merged.len(), 1);

@@ -325,7 +325,9 @@ def refine_labels(tokens: list[str], ner_tags: list[int]) -> list[str]:
     for span_start, span_end in spans_13:
         # Check if this span contains address-like signals before labeling NAME/ADDRESS.
         # Without signals, only label explicit PII (EMAIL, PHONE, ZIP, ACCOUNT).
-        span_tokens = [tokens[i].lower().rstrip(",.") for i in range(span_start, span_end + 1)]
+        span_tokens = [
+            tokens[i].lower().rstrip(",.") for i in range(span_start, span_end + 1)
+        ]
         span_text = " ".join(span_tokens)
         has_address_signal = (
             any(t in STREET_SUFFIXES for t in span_tokens)
@@ -422,7 +424,10 @@ def token_shape(token: str) -> str:
 
 
 def extract_features(
-    tokens: list[str], i: int, bboxes: list[list] | None = None, line_info: dict | None = None
+    tokens: list[str],
+    i: int,
+    bboxes: list[list] | None = None,
+    line_info: dict | None = None,
 ) -> dict[str, Any]:
     """Extract CRF features for token at position i."""
     t = tokens[i]
@@ -536,7 +541,9 @@ def _build_line_info(bboxes: list[list]) -> dict:
     return info
 
 
-def tokens_to_features(tokens: list[str], bboxes: list[list] | None = None) -> list[dict]:
+def tokens_to_features(
+    tokens: list[str], bboxes: list[list] | None = None
+) -> list[dict]:
     line_info = _build_line_info(bboxes) if bboxes else None
     return [extract_features(tokens, i, bboxes, line_info) for i in range(len(tokens))]
 
@@ -544,7 +551,9 @@ def tokens_to_features(tokens: list[str], bboxes: list[list] | None = None) -> l
 # ── Data loading ─────────────────────────────────────
 
 
-def load_clean_gt(gt_path: str, max_samples: int = 0) -> list[tuple[list[str], list[str]]]:
+def load_clean_gt(
+    gt_path: str, max_samples: int = 0
+) -> list[tuple[list[str], list[str]]]:
     """Load clean FATURA2 tokenized GT: returns [(tokens, crf_labels), ...]."""
     with open(gt_path) as f:
         data = json.load(f)
@@ -727,7 +736,9 @@ def generate_synthetic(
                 variant_tokens.insert(split_at, "\n")
                 variant_labels.insert(split_at, "O")
 
-            if len(variant_tokens) >= 2 and any(label != "O" for label in variant_labels):
+            if len(variant_tokens) >= 2 and any(
+                label != "O" for label in variant_labels
+            ):
                 synthetic.append((variant_tokens, variant_labels))
 
     return synthetic
@@ -742,15 +753,24 @@ def main():
     parser.add_argument("--ocr", default="")
     parser.add_argument("--samples", type=int, default=0, help="Max clean GT samples")
     parser.add_argument("--ocr-samples", type=int, default=0, help="Max OCR samples")
-    parser.add_argument("--synthetic", type=int, default=2, help="Variants per clean sequence")
+    parser.add_argument(
+        "--synthetic", type=int, default=2, help="Variants per clean sequence"
+    )
     parser.add_argument("--c1", type=float, default=1.0, help="L1 regularization")
     parser.add_argument("--c2", type=float, default=1.0, help="L2 regularization")
     parser.add_argument("--max-iter", type=int, default=200, help="L-BFGS iterations")
     parser.add_argument("--output", default="data/crf_model.json")
-    parser.add_argument("--kfold", type=int, default=0, help="Run k-fold cross-validation (0=skip)")
-    parser.add_argument("--save-folds", action="store_true", help="Save per-fold metrics to JSON")
     parser.add_argument(
-        "--holdout", type=float, default=0.15, help="Hold-out fraction (used when --kfold=0)"
+        "--kfold", type=int, default=0, help="Run k-fold cross-validation (0=skip)"
+    )
+    parser.add_argument(
+        "--save-folds", action="store_true", help="Save per-fold metrics to JSON"
+    )
+    parser.add_argument(
+        "--holdout",
+        type=float,
+        default=0.15,
+        help="Hold-out fraction (used when --kfold=0)",
     )
     args = parser.parse_args()
 
@@ -772,7 +792,9 @@ def main():
         ocr_path = ROOT / args.ocr
         if ocr_path.exists():
             print(f"\nLoading OCR data from {ocr_path}...")
-            ocr_sequences_bbox = load_ocr_data(str(ocr_path), str(gt_path), args.ocr_samples)
+            ocr_sequences_bbox = load_ocr_data(
+                str(ocr_path), str(gt_path), args.ocr_samples
+            )
             print(f"  {len(ocr_sequences_bbox)} OCR-aligned sequences")
 
     # ── Generate synthetics ───────────────────────────
@@ -825,21 +847,34 @@ def main():
 
     def eval_crf(model, x_ev, y_ev):
         y_pred = model.predict(x_ev)
-        labels = sorted(set(label for seq in y_ev for label in seq))
+        labels = sorted({label for seq in y_ev for label in seq})
         metrics = {}
         for label in labels:
             tp = sum(
-                1 for s, p in zip(y_ev, y_pred) for t, p_ in zip(s, p) if t == label and p_ == label
+                1
+                for s, p in zip(y_ev, y_pred)
+                for t, p_ in zip(s, p)
+                if t == label and p_ == label
             )
             fp = sum(
-                1 for s, p in zip(y_ev, y_pred) for t, p_ in zip(s, p) if t != label and p_ == label
+                1
+                for s, p in zip(y_ev, y_pred)
+                for t, p_ in zip(s, p)
+                if t != label and p_ == label
             )
             fn = sum(
-                1 for s, p in zip(y_ev, y_pred) for t, p_ in zip(s, p) if t == label and p_ != label
+                1
+                for s, p in zip(y_ev, y_pred)
+                for t, p_ in zip(s, p)
+                if t == label and p_ != label
             )
             precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
             recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-            f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
+            f1 = (
+                2 * precision * recall / (precision + recall)
+                if (precision + recall) > 0
+                else 0.0
+            )
             beta = 5
             f5 = (
                 (1 + beta**2) * precision * recall / (beta**2 * precision + recall)
@@ -892,7 +927,9 @@ def main():
             X_val_fold = [X[i] for i in val_idx_set]
             y_val_fold = [y[i] for i in val_idx_set]
 
-            print(f"\n--- Fold {fold + 1}/{k}: train={len(X_tr)}, val={len(X_val_fold)} ---")
+            print(
+                f"\n--- Fold {fold + 1}/{k}: train={len(X_tr)}, val={len(X_val_fold)} ---"
+            )
             model = train_crf(X_tr, y_tr)
             # Eval on training set to detect overfitting
             _, train_m, _ = eval_crf(model, X_tr, y_tr)
@@ -990,11 +1027,13 @@ def main():
         y_val = [y[i] for i in val_idx_set]
         print(f"Train: {len(X_train)} sequences, Val: {len(X_val)} sequences")
 
-        print(f"\nTraining CRF (c1={args.c1}, c2={args.c2}, max_iter={args.max_iter})...")
+        print(
+            f"\nTraining CRF (c1={args.c1}, c2={args.c2}, max_iter={args.max_iter})..."
+        )
         num_sequences = len(X_train)
         crf = train_crf(X_train, y_train)
 
-        y_pred, val_metrics, labels_present = eval_crf(crf, X_val, y_val)
+        _, val_metrics, labels_present = eval_crf(crf, X_val, y_val)
         print("\n=== CRF Validation Metrics ===")
         print(f"Sequences: {len(X_val)}, Labels: {labels_present}\n")
         for label in labels_present:

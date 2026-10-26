@@ -73,7 +73,8 @@ def _classify_chunk(chunk: list[tuple[str, list[int]]]) -> dict:
 
         try:
             features = extract_all(pixels, w, h)
-        except Exception:
+        except (ValueError, RuntimeError) as e:
+            print(f"    feature extraction failed: {e}")
             errors += 1
             for j in range(len(LABEL_NAMES)):
                 if actual_labels[j] == 0:
@@ -90,7 +91,9 @@ def _classify_chunk(chunk: list[tuple[str, list[int]]]) -> dict:
             tpl = _trees_per_label or 0
             start = label_idx * tpl
             end = start + tpl
-            logit = sum((_predict_one(trees, i, features) for i in range(start, end)), 0.0)
+            logit = sum(
+                (_predict_one(trees, i, features) for i in range(start, end)), 0.0
+            )
             preds.append(sigmoid(logit))
 
         for j in range(len(LABEL_NAMES)):
@@ -124,7 +127,9 @@ def main():
     total_trees = len(raw)
     assert total_trees % len(LABEL_NAMES) == 0
     trees_per_label = total_trees // len(LABEL_NAMES)
-    print(f"Model: {total_trees} trees ({trees_per_label} per label), {args.workers} workers")
+    print(
+        f"Model: {total_trees} trees ({trees_per_label} per label), {args.workers} workers"
+    )
 
     # Parse labels
     with open(labels_path) as f:
@@ -194,7 +199,11 @@ def main():
         support = c["tp"] + c["fn"]
         precision = c["tp"] / (c["tp"] + c["fp"]) if (c["tp"] + c["fp"]) > 0 else 0.0
         recall = c["tp"] / support if support > 0 else 0.0
-        f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
+        f1 = (
+            2 * precision * recall / (precision + recall)
+            if (precision + recall) > 0
+            else 0.0
+        )
         accuracy = (c["tp"] + c["tn"]) / support if support > 0 else 1.0
         report[name] = {
             "precision": round(precision, 4),
@@ -207,7 +216,9 @@ def main():
         macro_p += precision
         macro_r += recall
         macro_f1 += f1
-        print(f"  {name:<14} P={precision:.4f}  R={recall:.4f}  F1={f1:.4f}  (n={support})")
+        print(
+            f"  {name:<14} P={precision:.4f}  R={recall:.4f}  F1={f1:.4f}  (n={support})"
+        )
 
     macro_p /= len(LABEL_NAMES)
     macro_r /= len(LABEL_NAMES)

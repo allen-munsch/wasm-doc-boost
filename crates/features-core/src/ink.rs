@@ -72,15 +72,7 @@ pub fn ink_features(gray: &[f64], width: usize, height: usize) -> Vec<f64> {
     let docstrum = docstrum_angle(gray, width, height, threshold);
 
     alloc::vec![
-        coverage,
-        ink_mean,
-        h_mean,
-        h_std,
-        v_mean,
-        v_std,
-        h_entropy,
-        v_entropy,
-        docstrum,
+        coverage, ink_mean, h_mean, h_std, v_mean, v_std, h_entropy, v_entropy, docstrum,
     ]
 }
 
@@ -91,12 +83,7 @@ pub fn ink_features(gray: &[f64], width: usize, height: usize) -> Vec<f64> {
 ///
 /// Horizontal text: angles cluster near 0. Rotated text: angles cluster
 /// near the rotation angle. Photos: angles are nearly uniform.
-fn docstrum_angle(
-    gray: &[f64],
-    width: usize,
-    height: usize,
-    threshold: f64,
-) -> f64 {
+fn docstrum_angle(gray: &[f64], width: usize, height: usize, threshold: f64) -> f64 {
     let max_search = 20isize;
     let mut sum_sin = 0.0;
     let mut sum_cos = 0.0;
@@ -141,6 +128,64 @@ fn docstrum_angle(
     0.5 * atan2(sum_sin / count as f64, sum_cos / count as f64)
 }
 
+/// Unfolded docstrum: raw circular mean of inter-row nearest-ink link angles
+/// plus its concentration.
+///
+/// Unlike `docstrum_angle` (inside `ink_features`, double-angle folded to
+/// [-pi/2, pi/2]), this keeps the raw link direction in (0, pi): links always
+/// point down (dy=+1), so the mean is pi/2 for horizontal text and shifts with
+/// tilt. The concentration is the resultant length / count in [0, 1] — the
+/// "pi-ambiguity" indicator: low concentration means the link angles are
+/// scattered (photo or noisy page) and the axis vote should not be trusted.
+///
+/// Returns [mean_angle_rad, concentration]. Kept out of `extract_all` until
+/// the Phase 3 retrain.
+pub fn docstrum_axis(gray: &[f64], width: usize, height: usize) -> Vec<f64> {
+    let threshold = otsu_threshold(gray);
+    let max_search = 20isize;
+    let mut sum_sin = 0.0;
+    let mut sum_cos = 0.0;
+    let mut count = 0u32;
+
+    for y in 0..height.saturating_sub(1) {
+        let row_start = y * width;
+        let next_row_start = (y + 1) * width;
+        for x in 0..width {
+            if gray[row_start + x] > threshold {
+                continue;
+            }
+            let mut best_dx: Option<isize> = None;
+            let mut best_dist = max_search;
+            for dx in -max_search..=max_search {
+                let nx = x as isize + dx;
+                if nx < 0 || nx >= width as isize {
+                    continue;
+                }
+                if gray[next_row_start + nx as usize] <= threshold {
+                    let dist = dx.abs();
+                    if dist < best_dist {
+                        best_dist = dist;
+                        best_dx = Some(dx);
+                    }
+                }
+            }
+            if let Some(dx) = best_dx {
+                let angle = atan2(1.0, dx as f64);
+                sum_sin += sin(angle);
+                sum_cos += cos(angle);
+                count += 1;
+            }
+        }
+    }
+
+    if count == 0 {
+        return alloc::vec![0.0, 0.0];
+    }
+    let mean = atan2(sum_sin / count as f64, sum_cos / count as f64);
+    let r = libm::sqrt(sum_sin * sum_sin + sum_cos * sum_cos) / count as f64;
+    alloc::vec![mean, r.clamp(0.0, 1.0)]
+}
+
 fn run_stats(runs: &[usize]) -> (f64, f64, f64) {
     let n = runs.len();
     if n == 0 {
@@ -177,12 +222,9 @@ fn run_stats(runs: &[usize]) -> (f64, f64, f64) {
     (mean, std, entropy)
 }
 
-fn otsu_threshold(values: &[f64]) -> f64 {
+pub fn otsu_threshold(values: &[f64]) -> f64 {
     let min_val = values.iter().cloned().fold(f64::INFINITY, f64::min);
-    let max_val = values
-        .iter()
-        .cloned()
-        .fold(f64::NEG_INFINITY, f64::max);
+    let max_val = values.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
     if (max_val - min_val) < 1e-12 {
         return 128.0;
     }
@@ -198,16 +240,16 @@ fn otsu_threshold(values: &[f64]) -> f64 {
 
     let total = values.len() as f64;
     let mut sum = 0.0;
-    for i in 0..n_bins {
-        sum += (min_val + (i as f64 + 0.5) * bin_width) * hist[i] as f64;
+    for (i, &h) in hist.iter().enumerate().take(n_bins) {
+        sum += (min_val + (i as f64 + 0.5) * bin_width) * h as f64;
     }
 
     let mut best_thresh = min_val;
     let mut best_variance = 0.0;
     let mut w_b = 0.0;
     let mut sum_b = 0.0;
-    for i in 0..n_bins {
-        w_b += hist[i] as f64;
+    for (i, &h) in hist.iter().enumerate().take(n_bins) {
+        w_b += h as f64;
         if w_b < 1.0 {
             continue;
         }
@@ -215,7 +257,7 @@ fn otsu_threshold(values: &[f64]) -> f64 {
         if w_f < 1.0 {
             break;
         }
-        sum_b += (min_val + (i as f64 + 0.5) * bin_width) * hist[i] as f64;
+        sum_b += (min_val + (i as f64 + 0.5) * bin_width) * h as f64;
         let m_b = sum_b / w_b;
         let m_f = (sum - sum_b) / w_f;
         let between = w_b * w_f * (m_b - m_f) * (m_b - m_f);
@@ -309,5 +351,30 @@ mod tests {
             "docstrum_angle={}",
             f[8]
         );
+    }
+
+    #[test]
+    fn docstrum_axis_horizontal_text() {
+        // Same simulated horizontal text: ink rows with white gaps. Unfolded
+        // links point straight down -> mean angle ~pi/2, high concentration.
+        let w = 20;
+        let h = 12;
+        let mut gray = vec![255.0; w * h];
+        for y in 0..h {
+            if y % 3 == 0 {
+                continue;
+            }
+            for x in 2..18 {
+                gray[y * w + x] = 0.0;
+            }
+        }
+        let f = docstrum_axis(&gray, w, h);
+        assert!(
+            (f[0] - core::f64::consts::FRAC_PI_2).abs() < 0.4,
+            "mean={}",
+            f[0]
+        );
+        assert!(f[1] > 0.5, "concentration={}", f[1]);
+        assert_eq!(f.len(), 2);
     }
 }

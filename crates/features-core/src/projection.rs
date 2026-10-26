@@ -10,7 +10,6 @@ use alloc::vec::Vec;
 ///
 /// Returns [row_proj_var, col_proj_var, row_col_ratio, row_entropy, col_entropy].
 pub fn projection_features(gray: &[f64], width: usize, height: usize) -> Vec<f64> {
-
     // Row projections: mean intensity per row
     let mut row_proj = Vec::with_capacity(height);
     for y in 0..height {
@@ -31,13 +30,15 @@ pub fn projection_features(gray: &[f64], width: usize, height: usize) -> Vec<f64
 
     // Variance of projections
     let row_mean = row_proj.iter().sum::<f64>() / height as f64;
-    let row_var = row_proj.iter()
+    let row_var = row_proj
+        .iter()
         .map(|&v| (v - row_mean) * (v - row_mean))
         .sum::<f64>()
         / height as f64;
 
     let col_mean = col_proj.iter().sum::<f64>() / width as f64;
-    let col_var = col_proj.iter()
+    let col_var = col_proj
+        .iter()
         .map(|&v| (v - col_mean) * (v - col_mean))
         .sum::<f64>()
         / width as f64;
@@ -53,13 +54,7 @@ pub fn projection_features(gray: &[f64], width: usize, height: usize) -> Vec<f64
     let row_entropy = projection_entropy(&row_proj, 16);
     let col_entropy = projection_entropy(&col_proj, 16);
 
-    alloc::vec![
-        row_var,
-        col_var,
-        ratio,
-        row_entropy,
-        col_entropy,
-    ]
+    alloc::vec![row_var, col_var, ratio, row_entropy, col_entropy,]
 }
 
 /// Entropy of a 1D projection using `n_bins` equal-width bins.

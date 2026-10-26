@@ -1614,8 +1614,6 @@ fn page_number_removal_mask(items: &[TextItem], document_page_count: usize) -> V
         .collect()
 }
 
-
-
 /// Remove numeric folios using complete document context before downstream
 /// non-table layout partitions could separate the evidence needed to recognize
 /// them.
@@ -1919,8 +1917,6 @@ pub(crate) fn group_into_lines_with_thresholds_and_regions(
         true,
     )
 }
-
-
 
 fn group_into_lines_with_thresholds_and_regions_impl(
     items: Vec<TextItem>,
@@ -2815,7 +2811,7 @@ mod tests {
 
     #[test]
     fn is_list_marker_column_detects_bullets() {
-        let items = vec![
+        let items = [
             make_item(1, 90.0, 100.0, "●"),
             make_item(1, 90.0, 114.0, "●"),
             make_item(1, 90.0, 128.0, "●"),
@@ -2828,7 +2824,7 @@ mod tests {
 
     #[test]
     fn is_list_marker_column_rejects_prose() {
-        let items = vec![
+        let items = [
             make_item(1, 30.0, 100.0, "Regular prose line"),
             make_item(1, 30.0, 114.0, "Another sentence"),
             make_item(1, 30.0, 128.0, "Third line"),

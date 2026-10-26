@@ -6,30 +6,30 @@ use crate::{Hit, HitKind};
 /// IIN (Issuer Identification Number) prefix table.
 /// (prefix_len, prefix_str, brand_name)
 const IIN_PREFIXES: &[(usize, &str)] = &[
-    (1, "4"),       // Visa
-    (2, "51"),      // MasterCard
-    (2, "52"),      // MasterCard
-    (2, "53"),      // MasterCard
-    (2, "54"),      // MasterCard
-    (2, "55"),      // MasterCard
-    (2, "34"),      // Amex
-    (2, "37"),      // Amex
-    (4, "6011"),    // Discover
-    (2, "65"),      // Discover
-    (3, "644"),     // Discover
-    (2, "36"),      // Diners Club
-    (2, "38"),      // Diners Club
-    (3, "300"),     // Diners Club
-    (3, "301"),     // Diners Club
-    (3, "302"),     // Diners Club
-    (3, "303"),     // Diners Club
-    (3, "304"),     // Diners Club
-    (3, "305"),     // Diners Club
-    (2, "35"),      // JCB
+    (1, "4"),    // Visa
+    (2, "51"),   // MasterCard
+    (2, "52"),   // MasterCard
+    (2, "53"),   // MasterCard
+    (2, "54"),   // MasterCard
+    (2, "55"),   // MasterCard
+    (2, "34"),   // Amex
+    (2, "37"),   // Amex
+    (4, "6011"), // Discover
+    (2, "65"),   // Discover
+    (3, "644"),  // Discover
+    (2, "36"),   // Diners Club
+    (2, "38"),   // Diners Club
+    (3, "300"),  // Diners Club
+    (3, "301"),  // Diners Club
+    (3, "302"),  // Diners Club
+    (3, "303"),  // Diners Club
+    (3, "304"),  // Diners Club
+    (3, "305"),  // Diners Club
+    (2, "35"),   // JCB
 ];
 
 /// Validate a digit string with the Luhn (mod-10) algorithm.
-fn luhn_ok(digits: &[u8]) -> bool {
+pub(crate) fn luhn_ok(digits: &[u8]) -> bool {
     let mut sum = 0u32;
     let mut double = false;
     for &d in digits.iter().rev() {
@@ -43,11 +43,11 @@ fn luhn_ok(digits: &[u8]) -> bool {
         sum += n;
         double = !double;
     }
-    sum % 10 == 0
+    sum.is_multiple_of(10)
 }
 
 /// Check if a digit string starts with a known card IIN prefix.
-fn has_card_iin(digits: &[u8]) -> bool {
+pub(crate) fn has_card_iin(digits: &[u8]) -> bool {
     for &(len, prefix) in IIN_PREFIXES {
         if digits.len() >= len && &digits[..len] == prefix.as_bytes() {
             return true;
@@ -129,8 +129,11 @@ fn scan_context(text: &str, _pan_start: usize, pan_end: usize, hits: &mut Vec<Hi
         let abs_slash = pan_end + slash_pos;
         if slash_pos >= 2 {
             let mm = &window[slash_pos - 2..slash_pos];
-            let yy_part = if slash_pos + 3 < window.len() && window.as_bytes()[slash_pos + 1].is_ascii_digit() {
-                if slash_pos + 5 < window.len() && window.as_bytes()[slash_pos + 3].is_ascii_digit() {
+            let yy_part = if slash_pos + 3 < window.len()
+                && window.as_bytes()[slash_pos + 1].is_ascii_digit()
+            {
+                if slash_pos + 5 < window.len() && window.as_bytes()[slash_pos + 3].is_ascii_digit()
+                {
                     &window[slash_pos + 1..slash_pos + 5] // YYYY
                 } else {
                     &window[slash_pos + 1..slash_pos + 3] // YY

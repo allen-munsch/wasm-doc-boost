@@ -1,7 +1,7 @@
+use crate::pixel_at;
 use alloc::vec;
 use alloc::vec::Vec;
 use libm::{cos, log2, sqrt};
-use crate::pixel_at;
 
 // ---------------------------------------------------------------------------
 // 2c-a: Block-wise 8×8 DCT energy
@@ -25,8 +25,7 @@ pub fn dct_low_freq_ratio(gray: &[f64], width: usize, height: usize) -> f64 {
             let mut block = [0.0f64; 64];
             for j in 0..8 {
                 for i in 0..8 {
-                    block[j * 8 + i] =
-                        gray[(by * 8 + j) * width + (bx * 8 + i)];
+                    block[j * 8 + i] = gray[(by * 8 + j) * width + (bx * 8 + i)];
                 }
             }
             let dct = dct_8x8(&block, 0);
@@ -69,8 +68,8 @@ fn dct_8x8(block: &[f64; 64], _stride: usize) -> [f64; 64] {
         for k in 0..8 {
             let mut sum = 0.0;
             for n in 0..8 {
-                sum += tmp[n * 8 + i]
-                    * cos(core::f64::consts::PI / 8.0 * (n as f64 + 0.5) * k as f64);
+                sum +=
+                    tmp[n * 8 + i] * cos(core::f64::consts::PI / 8.0 * (n as f64 + 0.5) * k as f64);
             }
             out[k * 8 + i] = sum;
         }
@@ -146,9 +145,7 @@ pub fn lbp_histogram(gray: &[f64], width: usize, height: usize) -> Vec<f64> {
     if total == 0 {
         return vec![0.0; 10];
     }
-    bins.iter()
-        .map(|&b| b as f64 / total as f64)
-        .collect()
+    bins.iter().map(|&b| b as f64 / total as f64).collect()
 }
 
 /// Find the rotation that gives the minimum 8-bit value (rotation-invariant).
@@ -209,14 +206,8 @@ fn downscale_gray(gray: &[f64], width: usize, height: usize, max_dim: usize) -> 
 
 /// Quantize f64 values into `levels` gray levels (0..levels-1).
 fn quantize(values: &[f64], levels: usize) -> Vec<usize> {
-    let min_val = values
-        .iter()
-        .cloned()
-        .fold(f64::INFINITY, f64::min);
-    let max_val = values
-        .iter()
-        .cloned()
-        .fold(f64::NEG_INFINITY, f64::max);
+    let min_val = values.iter().cloned().fold(f64::INFINITY, f64::min);
+    let max_val = values.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
     let range = max_val - min_val;
     if range < 1e-12 {
         return vec![0; values.len()];
@@ -330,8 +321,8 @@ pub fn glcm_features(gray: &[f64], width: usize, height: usize) -> Vec<f64> {
 
         // Energy
         let mut energy = 0.0;
-        for k in 0..256 {
-            energy += p[k] * p[k];
+        for &v in p.iter() {
+            energy += v * v;
         }
         energy_sum += energy;
 
@@ -346,12 +337,7 @@ pub fn glcm_features(gray: &[f64], width: usize, height: usize) -> Vec<f64> {
     }
 
     let d = dirs_with_data.max(1) as f64;
-    alloc::vec![
-        contrast_sum / d,
-        corr_sum / d,
-        energy_sum / d,
-        homo_sum / d,
-    ]
+    alloc::vec![contrast_sum / d, corr_sum / d, energy_sum / d, homo_sum / d,]
 }
 
 // ---------------------------------------------------------------------------
@@ -360,15 +346,14 @@ pub fn glcm_features(gray: &[f64], width: usize, height: usize) -> Vec<f64> {
 
 /// Approximate fractal dimension via box-counting on edge map.
 pub fn fractal_dimension(gray: &[f64], width: usize, height: usize) -> f64 {
-
     // Simple edge map: threshold gradient magnitude
     let mut edge_map = vec![false; width * height];
     for y in 1..height as isize - 1 {
         for x in 1..width as isize - 1 {
-            let gx = pixel_at(gray, width, height, x + 1, y)
-                - pixel_at(gray, width, height, x - 1, y);
-            let gy = pixel_at(gray, width, height, x, y + 1)
-                - pixel_at(gray, width, height, x, y - 1);
+            let gx =
+                pixel_at(gray, width, height, x + 1, y) - pixel_at(gray, width, height, x - 1, y);
+            let gy =
+                pixel_at(gray, width, height, x, y + 1) - pixel_at(gray, width, height, x, y - 1);
             let mag = sqrt(gx * gx + gy * gy);
             edge_map[y as usize * width + x as usize] = mag > 10.0;
         }
@@ -392,8 +377,7 @@ pub fn fractal_dimension(gray: &[f64], width: usize, height: usize) -> f64 {
                 let mut has_edge = false;
                 for dy in 0..box_size {
                     for dx in 0..box_size {
-                        let idx =
-                            (by_i * box_size + dy) * width + (bx_i * box_size + dx);
+                        let idx = (by_i * box_size + dy) * width + (bx_i * box_size + dx);
                         if edge_map[idx] {
                             has_edge = true;
                             break;
@@ -471,7 +455,7 @@ mod tests {
         assert_eq!(f.len(), 4);
         // Solid image: zero contrast, max homogeneity, energy=1
         assert!(f[0] < 0.001); // contrast ~ 0
-        assert!(f[3] > 0.99);  // homogeneity ~ 1
+        assert!(f[3] > 0.99); // homogeneity ~ 1
     }
 
     #[test]

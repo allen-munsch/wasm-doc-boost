@@ -9,12 +9,11 @@
 //!   - label_weights: per-label weight vectors \[K\]\[F\]
 //!   - transitions: transition score matrix \[K\]\[K\]
 
-use alloc::format;
+use crate::{Hit, HitKind};
 use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec;
 use alloc::vec::Vec;
-use crate::{Hit, HitKind};
 
 /// A loaded CRF model ready for inference.
 pub struct CrfModel {
@@ -84,13 +83,56 @@ fn token_shape(token: &str) -> String {
 fn is_street_suffix(lower: &str) -> bool {
     matches!(
         lower,
-        "street" | "st" | "st." | "avenue" | "ave" | "ave." | "road" | "rd" | "rd."
-            | "drive" | "dr" | "dr." | "lane" | "ln" | "ln." | "court" | "ct" | "ct."
-            | "boulevard" | "blvd" | "blvd." | "way" | "place" | "pl" | "pl."
-            | "causeway" | "cswy" | "highway" | "hwy" | "parkway" | "pkwy"
-            | "circle" | "cir" | "trail" | "trl" | "suite" | "ste" | "apt" | "unit"
-            | "po" | "p.o." | "box"
-            | "terrace" | "ter" | "ter." | "square" | "sq" | "plaza" | "plz" | "mall"
+        "street"
+            | "st"
+            | "st."
+            | "avenue"
+            | "ave"
+            | "ave."
+            | "road"
+            | "rd"
+            | "rd."
+            | "drive"
+            | "dr"
+            | "dr."
+            | "lane"
+            | "ln"
+            | "ln."
+            | "court"
+            | "ct"
+            | "ct."
+            | "boulevard"
+            | "blvd"
+            | "blvd."
+            | "way"
+            | "place"
+            | "pl"
+            | "pl."
+            | "causeway"
+            | "cswy"
+            | "highway"
+            | "hwy"
+            | "parkway"
+            | "pkwy"
+            | "circle"
+            | "cir"
+            | "trail"
+            | "trl"
+            | "suite"
+            | "ste"
+            | "apt"
+            | "unit"
+            | "po"
+            | "p.o."
+            | "box"
+            | "terrace"
+            | "ter"
+            | "ter."
+            | "square"
+            | "sq"
+            | "plaza"
+            | "plz"
+            | "mall"
     )
 }
 
@@ -111,17 +153,47 @@ fn is_state_abbrev(upper: &str) -> bool {
 fn is_direction_word(lower: &str) -> bool {
     matches!(
         lower,
-        "n" | "s" | "e" | "w" | "north" | "south" | "east" | "west"
-            | "ne" | "nw" | "se" | "sw" | "n.e." | "n.w." | "s.e." | "s.w."
-            | "northeast" | "northwest" | "southeast" | "southwest"
+        "n" | "s"
+            | "e"
+            | "w"
+            | "north"
+            | "south"
+            | "east"
+            | "west"
+            | "ne"
+            | "nw"
+            | "se"
+            | "sw"
+            | "n.e."
+            | "n.w."
+            | "s.e."
+            | "s.w."
+            | "northeast"
+            | "northwest"
+            | "southeast"
+            | "southwest"
     )
 }
 
 fn is_title_prefix(lower: &str) -> bool {
     matches!(
         lower,
-        "mr" | "mr." | "mrs" | "mrs." | "ms" | "ms." | "miss" | "dr" | "dr."
-            | "prof" | "prof." | "sr" | "sr." | "jr" | "jr." | "md" | "phd"
+        "mr" | "mr."
+            | "mrs"
+            | "mrs."
+            | "ms"
+            | "ms."
+            | "miss"
+            | "dr"
+            | "dr."
+            | "prof"
+            | "prof."
+            | "sr"
+            | "sr."
+            | "jr"
+            | "jr."
+            | "md"
+            | "phd"
     )
 }
 
@@ -141,7 +213,7 @@ fn has_address_signal(text: &str) -> bool {
 
     // Strong signals: any one of these is sufficient
     for word in &words {
-        let w = word.trim_end_matches(|c: char| c == ',' || c == '.');
+        let w = word.trim_end_matches([',', '.']);
         if is_street_suffix(w) || is_direction_word(w) {
             return true;
         }
@@ -152,10 +224,7 @@ fn has_address_signal(text: &str) -> bool {
     }
     // State abbreviation in text
     for word in text.split_whitespace() {
-        if word.len() == 2
-            && word.chars().all(|c| c.is_uppercase())
-            && is_state_abbrev(word)
-        {
+        if word.len() == 2 && word.chars().all(|c| c.is_uppercase()) && is_state_abbrev(word) {
             return true;
         }
     }
@@ -163,7 +232,7 @@ fn has_address_signal(text: &str) -> bool {
     // (alphanumeric starting with digit, 2-5 chars).
     if words.len() >= 2 {
         for word in &words {
-            let w = word.trim_end_matches(|c: char| c == ',' || c == '.');
+            let w = word.trim_end_matches([',', '.']);
             if w.len() >= 2
                 && w.len() <= 5
                 && w.starts_with(|c: char| c.is_ascii_digit())
@@ -192,11 +261,8 @@ fn extract_name_prefix(address_text: &str) -> Option<usize> {
     // This anchors the address start — everything before it is the candidate name region.
     let mut addr_start = None;
     for (i, w) in words.iter().enumerate() {
-        let core = w.trim_end_matches(|c: char| c == ',' || c == '.');
-        if !core.is_empty()
-            && core.starts_with(|c: char| c.is_ascii_digit())
-            && core.len() <= 5
-        {
+        let core = w.trim_end_matches([',', '.']);
+        if !core.is_empty() && core.starts_with(|c: char| c.is_ascii_digit()) && core.len() <= 5 {
             addr_start = Some(i);
             break;
         }
@@ -215,7 +281,7 @@ fn extract_name_prefix(address_text: &str) -> Option<usize> {
     let mut name_start = addr_start;
     for j in (0..addr_start).rev() {
         let w = words[j];
-        let core = w.trim_end_matches(|c: char| c == ',' || c == '.');
+        let core = w.trim_end_matches([',', '.']);
         let lower = core.to_lowercase();
 
         if lower.is_empty() || !core.chars().all(|c| c.is_ascii_alphabetic()) {
@@ -235,7 +301,7 @@ fn extract_name_prefix(address_text: &str) -> Option<usize> {
     }
 
     let name_word_count = name_end - name_start;
-    if name_word_count < 1 || name_word_count > 3 {
+    if !(1..=3).contains(&name_word_count) {
         return None;
     }
 
@@ -269,14 +335,39 @@ fn has_name_signal(text: &str) -> bool {
     // (e.g. "bank" should not reject surname "Banks")
     let lower_words: Vec<&str> = lower.split_whitespace().collect();
     for kw in &[
-        "invoice", "date", "due", "total", "payment", "terms", "conditions",
-        "note", "order", "table", "logo", "number", "discount", "tax",
-        "subtotal", "ship", "shipped", "courier", "bank", "swift", "code",
-        "branch", "account", "site", "http", "www.",
-        "address", "thank", "gstin", "email",
+        "invoice",
+        "date",
+        "due",
+        "total",
+        "payment",
+        "terms",
+        "conditions",
+        "note",
+        "order",
+        "table",
+        "logo",
+        "number",
+        "discount",
+        "tax",
+        "subtotal",
+        "ship",
+        "shipped",
+        "courier",
+        "bank",
+        "swift",
+        "code",
+        "branch",
+        "account",
+        "site",
+        "http",
+        "www.",
+        "address",
+        "thank",
+        "gstin",
+        "email",
     ] {
         for w in &lower_words {
-            let w_clean = w.trim_end_matches(|c: char| c == ',' || c == '.');
+            let w_clean = w.trim_end_matches([',', '.']);
             if w_clean == *kw {
                 return false;
             }
@@ -291,7 +382,7 @@ fn has_name_signal(text: &str) -> bool {
             digit_tokens += 1;
         }
     }
-    if digit_tokens >= words.len() as u32 / 2 + 1 {
+    if digit_tokens > words.len() as u32 / 2 {
         return false;
     }
 
@@ -299,7 +390,7 @@ fn has_name_signal(text: &str) -> bool {
     // starts with uppercase, 2-20 chars, mostly alphabetic
     words.iter().any(|w| {
         let chars: Vec<char> = w.chars().collect();
-        chars.first().map_or(false, |c| c.is_uppercase())
+        chars.first().is_some_and(|c| c.is_uppercase())
             && w.len() >= 2
             && w.len() <= 20
             && chars.iter().filter(|c| c.is_alphabetic()).count() * 2 >= chars.len()
@@ -325,7 +416,7 @@ fn find_name_in_leading(leading: &str) -> Option<String> {
 
     for j in (0..words.len()).rev() {
         let w = words[j];
-        let core = w.trim_end_matches(|c: char| c == ',' || c == '.');
+        let core = w.trim_end_matches([',', '.']);
         let lower = core.to_lowercase();
 
         if lower.is_empty() || !core.chars().all(|c| c.is_ascii_alphabetic()) {
@@ -346,7 +437,7 @@ fn find_name_in_leading(leading: &str) -> Option<String> {
     }
 
     let count = name_end - name_start;
-    if count < 1 || count > 3 {
+    if !(1..=3).contains(&count) {
         return None;
     }
 
@@ -365,11 +456,7 @@ fn feature_id(model: &CrfModel, name: &str) -> Option<usize> {
 
 /// Extract CRF features for a token at position `i`.
 /// Returns a sparse list of (feature_index, value=1.0) pairs.
-fn extract_token_features(
-    model: &CrfModel,
-    tokens: &[&str],
-    i: usize,
-) -> Vec<(usize, f32)> {
+fn extract_token_features(model: &CrfModel, tokens: &[&str], i: usize) -> Vec<(usize, f32)> {
     let t = tokens[i];
     let mut feats = Vec::new();
 
@@ -397,19 +484,56 @@ fn extract_token_features(
     let w_len = alloc::format!("w_len:{}", t.len().min(20));
     add(&w_len);
 
-    let w_upper = alloc::format!("w_upper:{}", if t.chars().all(|c| c.is_uppercase()) { "1" } else { "0" });
+    let w_upper = alloc::format!(
+        "w_upper:{}",
+        if t.chars().all(|c| c.is_uppercase()) {
+            "1"
+        } else {
+            "0"
+        }
+    );
     add(&w_upper);
 
-    let w_title = alloc::format!("w_title:{}", if t.chars().next().is_some_and(|c| c.is_uppercase()) && t.chars().skip(1).all(|c| c.is_lowercase()) { "1" } else { "0" });
+    let w_title = alloc::format!(
+        "w_title:{}",
+        if t.chars().next().is_some_and(|c| c.is_uppercase())
+            && t.chars().skip(1).all(|c| c.is_lowercase())
+        {
+            "1"
+        } else {
+            "0"
+        }
+    );
     add(&w_title);
 
-    let w_digit = alloc::format!("w_digit:{}", if t.chars().all(|c| c.is_ascii_digit()) { "1" } else { "0" });
+    let w_digit = alloc::format!(
+        "w_digit:{}",
+        if t.chars().all(|c| c.is_ascii_digit()) {
+            "1"
+        } else {
+            "0"
+        }
+    );
     add(&w_digit);
 
-    let w_alpha = alloc::format!("w_alpha:{}", if t.chars().all(|c| c.is_alphabetic()) { "1" } else { "0" });
+    let w_alpha = alloc::format!(
+        "w_alpha:{}",
+        if t.chars().all(|c| c.is_alphabetic()) {
+            "1"
+        } else {
+            "0"
+        }
+    );
     add(&w_alpha);
 
-    let w_has_digit = alloc::format!("w_has_digit:{}", if t.chars().any(|c| c.is_ascii_digit()) { "1" } else { "0" });
+    let w_has_digit = alloc::format!(
+        "w_has_digit:{}",
+        if t.chars().any(|c| c.is_ascii_digit()) {
+            "1"
+        } else {
+            "0"
+        }
+    );
     add(&w_has_digit);
 
     let w_has_at = alloc::format!("w_has_at:{}", if t.contains('@') { "1" } else { "0" });
@@ -418,10 +542,24 @@ fn extract_token_features(
     let w_has_hyphen = alloc::format!("w_has_hyphen:{}", if t.contains('-') { "1" } else { "0" });
     add(&w_has_hyphen);
 
-    let w_has_alpha = alloc::format!("w_has_alpha:{}", if t.chars().any(|c| c.is_alphabetic()) { "1" } else { "0" });
+    let w_has_alpha = alloc::format!(
+        "w_has_alpha:{}",
+        if t.chars().any(|c| c.is_alphabetic()) {
+            "1"
+        } else {
+            "0"
+        }
+    );
     add(&w_has_alpha);
 
-    let w_punct = alloc::format!("w_punct:{}", if !t.is_empty() && t.chars().all(|c| !c.is_alphanumeric()) { "1" } else { "0" });
+    let w_punct = alloc::format!(
+        "w_punct:{}",
+        if !t.is_empty() && t.chars().all(|c| !c.is_alphanumeric()) {
+            "1"
+        } else {
+            "0"
+        }
+    );
     add(&w_punct);
 
     // First-character type (shape prefix)
@@ -443,22 +581,55 @@ fn extract_token_features(
     add(&w_starts);
 
     // Gazetteer features for ADDRESS/NAME disambiguation
-    let tl = t.trim_end_matches(|c: char| c == ',' || c == '.').to_lowercase();
-    let w_street_suffix = alloc::format!("w_street_suffix:{}", if is_street_suffix(&tl) { "1" } else { "0" });
+    let tl = t.trim_end_matches([',', '.']).to_lowercase();
+    let w_street_suffix = alloc::format!(
+        "w_street_suffix:{}",
+        if is_street_suffix(&tl) { "1" } else { "0" }
+    );
     add(&w_street_suffix);
-    let w_state_abbrev = alloc::format!("w_state_abbrev:{}", if t.len() == 2 && is_state_abbrev(t) { "1" } else { "0" });
+    let w_state_abbrev = alloc::format!(
+        "w_state_abbrev:{}",
+        if t.len() == 2 && is_state_abbrev(t) {
+            "1"
+        } else {
+            "0"
+        }
+    );
     add(&w_state_abbrev);
-    let w_direction = alloc::format!("w_direction:{}", if is_direction_word(&tl) { "1" } else { "0" });
+    let w_direction = alloc::format!(
+        "w_direction:{}",
+        if is_direction_word(&tl) { "1" } else { "0" }
+    );
     add(&w_direction);
-    let w_is_bldg_num = alloc::format!("w_is_bldg_num:{}", if t.starts_with(|c: char| c.is_ascii_digit()) && t.len() <= 5 && !t.chars().all(|c| c.is_ascii_digit()) { "1" } else { "0" });
+    let w_is_bldg_num = alloc::format!(
+        "w_is_bldg_num:{}",
+        if t.starts_with(|c: char| c.is_ascii_digit())
+            && t.len() <= 5
+            && !t.chars().all(|c| c.is_ascii_digit())
+        {
+            "1"
+        } else {
+            "0"
+        }
+    );
     add(&w_is_bldg_num);
-    let w_title_prefix = alloc::format!("w_title_prefix:{}", if is_title_prefix(&tl) { "1" } else { "0" });
+    let w_title_prefix = alloc::format!(
+        "w_title_prefix:{}",
+        if is_title_prefix(&tl) { "1" } else { "0" }
+    );
     add(&w_title_prefix);
-    let w_po_box = alloc::format!("w_po_box:{}", if matches!(tl.as_str(), "po" | "p.o." | "box" | "p.o" | "pobox") { "1" } else { "0" });
+    let w_po_box = alloc::format!(
+        "w_po_box:{}",
+        if matches!(tl.as_str(), "po" | "p.o." | "box" | "p.o" | "pobox") {
+            "1"
+        } else {
+            "0"
+        }
+    );
     add(&w_po_box);
 
     // Personal name heuristic: capital-start alpha word not matching any gazetteer category
-    let is_person_name = t.chars().next().map_or(false, |c| c.is_uppercase())
+    let is_person_name = t.chars().next().is_some_and(|c| c.is_uppercase())
         && t.chars().all(|c| c.is_alphabetic())
         && t.len() >= 2
         && t.len() <= 20
@@ -467,7 +638,8 @@ fn extract_token_features(
         && !is_title_prefix(&tl)
         && !(t.len() == 2 && is_state_abbrev(t))
         && !matches!(tl.as_str(), "po" | "p.o." | "box" | "p.o" | "pobox");
-    let w_is_name_word = alloc::format!("w_is_name_word:{}", if is_person_name { "1" } else { "0" });
+    let w_is_name_word =
+        alloc::format!("w_is_name_word:{}", if is_person_name { "1" } else { "0" });
     add(&w_is_name_word);
 
     if t.len() >= 2 {
@@ -544,10 +716,7 @@ fn label_to_kind(label: &str) -> Option<HitKind> {
 /// Returns `(label_indices, scores)` where `label_indices[i]` is
 /// the predicted label index for token `i` and `scores` is the
 /// per-token confidence.
-fn viterbi(
-    model: &CrfModel,
-    token_features: &[Vec<(usize, f32)>],
-) -> (Vec<usize>, Vec<f32>) {
+fn viterbi(model: &CrfModel, token_features: &[Vec<(usize, f32)>]) -> (Vec<usize>, Vec<f32>) {
     let k = model.labels.len();
     let n = token_features.len();
 
@@ -580,8 +749,8 @@ fn viterbi(
 
             let mut best_score = f32::NEG_INFINITY;
             let mut best_prev = 0;
-            for prev in 0..k {
-                let score = dp[t - 1][prev].0 + model.transitions[prev][l] + emission;
+            for (prev, &(prev_score, _)) in dp[t - 1].iter().enumerate() {
+                let score = prev_score + model.transitions[prev][l] + emission;
                 if score > best_score {
                     best_score = score;
                     best_prev = prev;
@@ -596,9 +765,9 @@ fn viterbi(
     let mut labels = vec![0usize; n];
     let mut best_final = f32::NEG_INFINITY;
     let mut best_idx = 0;
-    for l in 0..k {
-        if dp[n - 1][l].0 > best_final {
-            best_final = dp[n - 1][l].0;
+    for (l, &(score, _)) in dp[n - 1].iter().enumerate() {
+        if score > best_final {
+            best_final = score;
             best_idx = l;
         }
     }
@@ -681,7 +850,7 @@ pub fn decode(model: &CrfModel, text: &str) -> Vec<Hit> {
                         // ADDRESS spans must contain at least one address-like signal.
                         // All spans (single-word and multi-word) are validated — the CRF
                         // tends to over-label, so structural checks are essential.
-                        has_address_signal(&matched_text)
+                        has_address_signal(matched_text)
                     }
                     HitKind::Name => {
                         // NAME spans should look like person names:
@@ -693,7 +862,7 @@ pub fn decode(model: &CrfModel, text: &str) -> Vec<Hit> {
                             // All-numeric spans are never names
                             false
                         } else {
-                            has_name_signal(&matched_text)
+                            has_name_signal(matched_text)
                         }
                     }
                     _ => true,
@@ -744,13 +913,13 @@ pub fn decode(model: &CrfModel, text: &str) -> Vec<Hit> {
             if name_text.is_none() && h.start > 0 {
                 let lookback = h.start.saturating_sub(40);
                 let leading = text[lookback..h.start].trim_end();
-                if let Some(candidate) = find_name_in_leading(leading) {
-                    if has_name_signal(&candidate) {
-                        // Find byte position of candidate within leading text
-                        let pos = leading.rfind(&candidate).unwrap_or(0);
-                        name_text = Some(candidate);
-                        name_byte_offset = Some(h.start - lookback - pos);
-                    }
+                if let Some(candidate) = find_name_in_leading(leading)
+                    && has_name_signal(&candidate)
+                {
+                    // Find byte position of candidate within leading text
+                    let pos = leading.rfind(&candidate).unwrap_or(0);
+                    name_text = Some(candidate);
+                    name_byte_offset = Some(h.start - lookback - pos);
                 }
             }
 

@@ -68,7 +68,11 @@ def _process_image(args):
 
         feats_list, labels_list, fnames_list = [], [], []
         for rot_idx, angle in enumerate(ROTATION_ANGLES):
-            rotated = img if angle == 0 else img.rotate(-angle, expand=True, resample=Image.BICUBIC)
+            rotated = (
+                img
+                if angle == 0
+                else img.rotate(-angle, expand=True, resample=Image.BICUBIC)
+            )
             rgb = rotated.convert("RGB")
             rw, rh = rgb.size
             pixels = np.array(rgb, dtype=np.uint8).tobytes()
@@ -79,7 +83,8 @@ def _process_image(args):
             labels_list.append(label_vec + rotation_labels)
             fnames_list.append(f"{fname}_rot{angle}")
         return (feats_list, labels_list, fnames_list)
-    except Exception:
+    except (OSError, ValueError, RuntimeError) as e:
+        print(f"    skipping {fname}: {e}")
         return None
 
 
@@ -131,7 +136,10 @@ def main():
         filenames=np.array(filename_list),
         label_names=np.array(LABEL_NAMES),
     )
-    print(f"Wrote {args.output} ({os.path.getsize(args.output) / 1024:.0f} KB)", flush=True)
+    print(
+        f"Wrote {args.output} ({os.path.getsize(args.output) / 1024:.0f} KB)",
+        flush=True,
+    )
 
 
 if __name__ == "__main__":

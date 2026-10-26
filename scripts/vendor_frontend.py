@@ -77,7 +77,7 @@ def main() -> int:
         try:
             download(url, dest)
             ok += 1
-        except Exception as e:
+        except (OSError, ValueError) as e:
             print(f"  FAIL {url}: {e}")
             fail += 1
     print(f"\nDone: {ok} fetched/skipped, {fail} failed")

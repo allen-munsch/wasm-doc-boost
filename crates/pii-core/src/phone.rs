@@ -36,7 +36,9 @@ fn scan_international_phone(text: &str, hits: &mut Vec<Hit>) {
                 paren_depth += 1;
             } else if b == b')' {
                 paren_depth -= 1;
-                if paren_depth < 0 { break; }
+                if paren_depth < 0 {
+                    break;
+                }
             } else if !b.is_ascii_digit() && b != b'-' && b != b' ' {
                 break;
             }
@@ -48,7 +50,7 @@ fn scan_international_phone(text: &str, hits: &mut Vec<Hit>) {
         }
         let candidate = &text[i..j];
         let digit_count = candidate.chars().filter(|c| c.is_ascii_digit()).count();
-        if digit_count >= 7 && digit_count <= 15 {
+        if (7..=15).contains(&digit_count) {
             // Don't flag standalone "+NNNNNNN" as phone (must have formatting)
             if candidate.contains('-') || candidate.contains('(') || candidate.contains(' ') {
                 hits.push(Hit {
@@ -134,7 +136,7 @@ fn scan_raw_digit_phone(bytes: &[u8], text: &str, hits: &mut Vec<Hit>) {
         let digits = &bytes[start..i];
 
         let area_idx = match len {
-            10 => 0_usize,     // NANP: area code first
+            10 => 0_usize,                      // NANP: area code first
             11 if digits[0] == b'1' => 1_usize, // Country code 1 + NANP
             _ => continue,
         };

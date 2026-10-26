@@ -65,13 +65,22 @@ def extract_features(img: Image.Image) -> np.ndarray:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Migrate features to v2 with rotation labels")
+    parser = argparse.ArgumentParser(
+        description="Migrate features to v2 with rotation labels"
+    )
     parser.add_argument("--input", required=True, help="Existing features.npz (v1)")
-    parser.add_argument("--images", required=True, help="Image directory (e.g. data/images)")
-    parser.add_argument("--output", required=True, help="Output .npz path (v2)")
-    parser.add_argument("--sample", type=int, default=0, help="Limit to N images (0=all)")
     parser.add_argument(
-        "--chunk", type=str, default="", help="Slice as 'start:end' (0-indexed, end exclusive)"
+        "--images", required=True, help="Image directory (e.g. data/images)"
+    )
+    parser.add_argument("--output", required=True, help="Output .npz path (v2)")
+    parser.add_argument(
+        "--sample", type=int, default=0, help="Limit to N images (0=all)"
+    )
+    parser.add_argument(
+        "--chunk",
+        type=str,
+        default="",
+        help="Slice as 'start:end' (0-indexed, end exclusive)",
     )
     args = parser.parse_args()
 
@@ -93,7 +102,9 @@ def main():
         n_samples = min(args.sample, n_samples)
 
     print(f"Source: {len(old_features)} samples, {old_features.shape[1]} features")
-    print(f"Processing: {n_samples} images × 4 rotations = {n_samples * 4} output samples")
+    print(
+        f"Processing: {n_samples} images × 4 rotations = {n_samples * 4} output samples"
+    )
 
     new_features = []
     new_labels = []
@@ -110,7 +121,8 @@ def main():
         try:
             img = Image.open(img_path).convert("RGB")
             img = resize_image(img)
-        except Exception:
+        except (OSError, ValueError) as e:
+            print(f"    skipping unreadable image {img_path}: {e}")
             errors += 1
             continue
 
@@ -120,11 +132,14 @@ def main():
             if angle == 0:
                 rotated = img
             else:
-                rotated = img.rotate(-angle, expand=True, resample=Image.Resampling.BICUBIC)
+                rotated = img.rotate(
+                    -angle, expand=True, resample=Image.Resampling.BICUBIC
+                )
 
             try:
                 feats = extract_features(rotated)
-            except Exception:
+            except (OSError, ValueError, RuntimeError) as e:
+                print(f"    feature extraction failed: {e}")
                 errors += 1
                 continue
 

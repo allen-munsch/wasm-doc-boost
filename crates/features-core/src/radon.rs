@@ -1,0 +1,393 @@
+//! Radon / projection-profile response for fine-axis orientation detection.
+//!
+//! For each angle in [0, 180) we rotate the grayscale image by -angle and
+//! measure the variance of its horizontal projection (mean intensity per
+//! row). Text lines run horizontally when that variance peaks, so
+//! `argmax(curve)` estimates the text-line axis modulo 180 degrees. The
+//! projection variance is exactly 180-periodic, so this signal carries the
+//! axis (fine angle) but NOT the 0-vs-180 flip — the flip is the textline
+//! ascender/descender head's job.
+//!
+//! no_std; nearest-neighbour sampling, no bilinear interpolation. Wired into
+//! `extract_all` at the Phase 3 retrain step (kept out until then so the
+//! existing 103-feature model contract stays loadable).
+
+use alloc::vec;
+use alloc::vec::Vec;
+
+/// Number of angles sampled. 60 bins at 3 degrees over [0, 180).
+pub const RADON_BINS: usize = 60;
+/// Degrees per bin.
+pub const RADON_DEG_PER_BIN: f64 = 3.0;
+
+/// Projection-variance response curve over `RADON_BINS` angles in [0, 180).
+///
+/// `curve[i]` is the horizontal-projection variance of the image rotated by
+/// `-i * 3` degrees. The peak bin is the text-line axis.
+pub fn radon_curve(gray: &[f64], width: usize, height: usize) -> Vec<f64> {
+    // Pad to a max(w,h) square, centred, filled with the border colour. The
+    // padding keeps every rotation inside the sampling canvas: a landscape
+    // canvas cannot hold its own 90-degree rotation (the content would be
+    // cropped to a strip), and a centre crop discards the top/bottom text
+    // lines of a portrait page. Padding preserves the full content while
+    // making the canvas rotation-invariant.
+    let size = width.max(height);
+    if size == 0 {
+        return vec![0.0f64; RADON_BINS];
+    }
+    let fill = border_median(gray, width, height);
+    let mut padded = vec![fill; size * size];
+    let ox = (size - width) / 2;
+    let oy = (size - height) / 2;
+    for y in 0..height {
+        for x in 0..width {
+            padded[(y + oy) * size + (x + ox)] = gray[y * width + x];
+        }
+    }
+
+    let mut curve = Vec::with_capacity(RADON_BINS);
+    for i in 0..RADON_BINS {
+        let deg = i as f64 * RADON_DEG_PER_BIN;
+        curve.push(projection_variance_at(&padded, size, size, deg));
+    }
+    curve
+}
+
+/// Median of the outer-frame pixels — the document's own background, used as
+/// the square-padding fill so the padding does not inject edge structure.
+fn border_median(gray: &[f64], width: usize, height: usize) -> f64 {
+    if width == 0 || height == 0 {
+        return 128.0;
+    }
+    let t = (width.min(height) / 40).max(1);
+    let mut samples = Vec::new();
+    for y in 0..t.min(height) {
+        for x in 0..width {
+            samples.push(gray[y * width + x]);
+        }
+    }
+    for y in (height - t.min(height))..height {
+        for x in 0..width {
+            samples.push(gray[y * width + x]);
+        }
+    }
+    for y in 0..height {
+        for x in 0..t.min(width) {
+            samples.push(gray[y * width + x]);
+        }
+        for x in (width - t.min(width))..width {
+            samples.push(gray[y * width + x]);
+        }
+    }
+    samples.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
+    samples[samples.len() / 2]
+}
+
+/// Variance of the horizontal projection of a square image rotated by `-deg`.
+fn projection_variance_at(gray: &[f64], width: usize, height: usize, deg: f64) -> f64 {
+    if width == 0 || height == 0 {
+        return 0.0;
+    }
+    let rad = deg.to_radians();
+    let sin_t = libm::sin(rad);
+    let cos_t = libm::cos(rad);
+    let cx = (width as f64 - 1.0) / 2.0;
+    let cy = (height as f64 - 1.0) / 2.0;
+    let n = (width * height) as f64;
+
+    let mut row_sums = vec![0.0f64; height];
+    let mut total = 0.0;
+
+    for (y, slot) in row_sums.iter_mut().enumerate() {
+        let yc = y as f64 - cy;
+        let mut row_sum = 0.0;
+        for x in 0..width {
+            let xc = x as f64 - cx;
+            // Output point (x, y) back-rotated into the source: rotating the
+            // image by -deg samples the source at rotate(+deg) of the output
+            // point. Nearest neighbour, clamped to the border.
+            let xs = xc * cos_t - yc * sin_t + cx;
+            let ys = xc * sin_t + yc * cos_t + cy;
+            // Nearest neighbour: shift by 0.5 then clamp-then-cast, the
+            // core-only pattern used across features-core (f64::round and
+            // f64::floor are std-gated on this toolchain).
+            let xi = (xs + 0.5).clamp(0.0, width as f64 - 1.0) as usize;
+            let yi = (ys + 0.5).clamp(0.0, height as f64 - 1.0) as usize;
+            row_sum += gray[yi * width + xi];
+        }
+        *slot = row_sum;
+        total += row_sum;
+    }
+
+    let mean = total / n;
+    let mut var = 0.0;
+    for &row_sum in row_sums.iter() {
+        let row_mean = row_sum / width as f64;
+        let d = row_mean - mean;
+        var += d * d;
+    }
+    var / height as f64
+}
+
+/// Index and value of the maximum of a slice.
+pub fn argmax(curve: &[f64]) -> (usize, f64) {
+    let mut best = 0usize;
+    let mut best_val = f64::NEG_INFINITY;
+    for (i, &v) in curve.iter().enumerate() {
+        if v > best_val {
+            best_val = v;
+            best = i;
+        }
+    }
+    (best, best_val)
+}
+
+/// Parabolic refinement of the peak at bin `i`, returned in bins.
+///
+/// Fits a parabola through curve[i-1], curve[i], curve[i+1] and returns the
+/// vertex position (within 0.5 bins of `i`). The curve is 180-periodic, so
+/// the neighbours wrap: bin 0 refines against the last bin and bin 1, bin 59
+/// against bin 58 and bin 0. Refusing to wrap here (returning the unrefined
+/// bin) left a ~1.5-degree quantization error for axes near the 0/180 fold.
+pub fn parabolic_refine(curve: &[f64], i: usize) -> f64 {
+    if curve.len() < 3 {
+        return i as f64;
+    }
+    let n = curve.len();
+    let y0 = curve[(i + n - 1) % n];
+    let y1 = curve[i];
+    let y2 = curve[(i + 1) % n];
+    let denom = y0 - 2.0 * y1 + y2;
+    if denom.abs() < 1e-12 {
+        return i as f64;
+    }
+    let delta = (0.5 * (y0 - y2) / denom).clamp(-0.5, 0.5);
+    i as f64 + delta
+}
+
+/// Top-k local maxima of the 180-periodic curve, parabolically refined,
+/// returned as axis angles in [0, pi) radians, highest curve value first.
+///
+/// When the text axis and a perpendicular structure (table rules, page
+/// edges) produce a near-tie, the global argmax can land on the wrong peak.
+/// Returning the top local maxima lets the caller score each candidate by
+/// text-line quality and pick the one that actually deskews text lines.
+pub fn radon_top_axes(curve: &[f64], k: usize) -> Vec<f64> {
+    let n = curve.len();
+    let mut maxima: Vec<(usize, f64)> = Vec::new();
+    for i in 0..n {
+        let prev = curve[(i + n - 1) % n];
+        let next = curve[(i + 1) % n];
+        let v = curve[i];
+        if v >= prev && v >= next {
+            maxima.push((i, v));
+        }
+    }
+    maxima.sort_unstable_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+    let mut axes = Vec::with_capacity(k);
+    for &(bin, _) in maxima.iter().take(k) {
+        let refined = parabolic_refine(curve, bin);
+        let mut deg = refined * RADON_DEG_PER_BIN;
+        while deg < 0.0 {
+            deg += 180.0;
+        }
+        while deg >= 180.0 {
+            deg -= 180.0;
+        }
+        axes.push(deg.to_radians());
+    }
+    axes
+}
+
+/// Curve summary for the trust head: `(peakiness, peak_margin, concentration)`
+/// computed from the curve's global argmax. Peakiness and peak_margin measure
+/// how dominant the strongest peak is (low = near-tie, e.g. a perpendicular
+/// structure competing with the text axis); concentration is the circular
+/// (double-angle) resultant length of the curve treated as a distribution over
+/// [0, pi), in [0, 1].
+pub fn radon_summary(curve: &[f64]) -> (f64, f64, f64) {
+    let (imax, peak) = argmax(curve);
+    let mean = curve.iter().sum::<f64>() / curve.len() as f64;
+    let peakiness = if mean > 1e-9 { peak / mean } else { 0.0 };
+
+    // Strongest peak outside the argmax's immediate neighbourhood.
+    let mut second = 0.0f64;
+    for (i, &v) in curve.iter().enumerate() {
+        if (i as isize - imax as isize).abs() > 1 && v > second {
+            second = v;
+        }
+    }
+    let peak_margin = peak - second;
+
+    // Circular concentration over [0, pi): double the angle, weighted by the
+    // curve values, then the resultant length / total weight.
+    let mut sum_sin = 0.0;
+    let mut sum_cos = 0.0;
+    let mut total_w = 0.0;
+    for (i, &v) in curve.iter().enumerate() {
+        let ang = 2.0 * (i as f64 * RADON_DEG_PER_BIN).to_radians();
+        sum_sin += v * libm::sin(ang);
+        sum_cos += v * libm::cos(ang);
+        total_w += v;
+    }
+    let concentration = if total_w > 1e-9 {
+        let r = libm::sqrt(sum_sin * sum_sin + sum_cos * sum_cos) / total_w;
+        r.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+
+    (peakiness, peak_margin, concentration)
+}
+
+/// Summary features for the GBDT: the deterministic axis estimate plus how
+/// much we should trust it.
+///
+/// Returns `[best_axis_rad, peakiness, peak_margin, concentration]`:
+/// - best_axis_rad: parabolically refined argmax in [0, pi).
+/// - peakiness: peak / mean of the curve (high = clear dominant axis).
+/// - peak_margin: peak minus the strongest non-adjacent peak.
+/// - concentration: circular concentration of the curve treated as a
+///   distribution over [0, pi) (double-angle), in [0, 1].
+///
+/// This is the single-peak (argmax-only) axis used by the standalone/bench
+/// entry points; `rotation_features` prefers the multi-candidate selection
+/// that scores the top local maxima by text-line quality.
+pub fn radon_features(gray: &[f64], width: usize, height: usize) -> Vec<f64> {
+    let curve = radon_curve(gray, width, height);
+    let (imax, _) = argmax(&curve);
+    let refined = parabolic_refine(&curve, imax);
+    let mut best_axis_deg = refined * RADON_DEG_PER_BIN;
+    while best_axis_deg < 0.0 {
+        best_axis_deg += 180.0;
+    }
+    while best_axis_deg >= 180.0 {
+        best_axis_deg -= 180.0;
+    }
+    let best_axis_rad = best_axis_deg.to_radians();
+    let (peakiness, peak_margin, concentration) = radon_summary(&curve);
+
+    alloc::vec![best_axis_rad, peakiness, peak_margin, concentration]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Stripes whose lines make angle `deg` (CCW from horizontal): level sets
+    /// of -x*sin(theta) + y*cos(theta).
+    fn striped(deg: f64, w: usize, h: usize, period: f64) -> Vec<f64> {
+        let theta = deg.to_radians();
+        let (sin_t, cos_t) = (libm::sin(theta), libm::cos(theta));
+        let mut gray = vec![0.0f64; w * h];
+        for y in 0..h {
+            for x in 0..w {
+                let phase = -(x as f64) * sin_t + (y as f64) * cos_t;
+                let v = if (phase / period).rem_euclid(2.0) < 1.0 {
+                    0.0
+                } else {
+                    255.0
+                };
+                gray[y * w + x] = v;
+            }
+        }
+        gray
+    }
+
+    #[test]
+    fn test_radon_argmax_horizontal_stripes() {
+        let gray = striped(0.0, 128, 128, 8.0);
+        let curve = radon_curve(&gray, 128, 128);
+        let (imax, _) = argmax(&curve);
+        // Horizontal stripes: peak at 0 deg (bin 0); bin 59 (177 deg) is the
+        // wrapped neighbour and may tie, so accept either end.
+        assert!(imax == 0 || imax == RADON_BINS - 1, "imax={imax}");
+    }
+
+    #[test]
+    fn test_radon_argmax_17_deg() {
+        let gray = striped(17.0, 128, 128, 8.0);
+        let curve = radon_curve(&gray, 128, 128);
+        let (imax, _) = argmax(&curve);
+        let refined = parabolic_refine(&curve, imax);
+        let best_axis_deg = (refined * RADON_DEG_PER_BIN).rem_euclid(180.0);
+        assert!(
+            (best_axis_deg - 17.0).abs() < 1.5,
+            "best_axis_deg={best_axis_deg} imax={imax}"
+        );
+    }
+
+    #[test]
+    fn test_radon_180_invariant() {
+        // Rotating the SAME image by 180 deg must leave the curve (nearly)
+        // unchanged: a 180 deg rotation maps each line onto itself and just
+        // permutes the rows, so the axis signal is flip-blind up to the small
+        // border-clamp artifact of the crop+clamp sampling (~1%). That
+        // blindness is the contract that forces the flip decision onto the
+        // textline head.
+        let a = striped(17.0, 96, 96, 8.0);
+        let mut b = vec![0.0f64; 96 * 96];
+        for y in 0..96 {
+            for x in 0..96 {
+                b[y * 96 + x] = a[(95 - y) * 96 + (95 - x)];
+            }
+        }
+        let ca = radon_curve(&a, 96, 96);
+        let cb = radon_curve(&b, 96, 96);
+        for i in 0..RADON_BINS {
+            assert!(
+                (ca[i] - cb[i]).abs() < 0.03 * (1.0 + ca[i].abs()),
+                "bin {i}: {} vs {}",
+                ca[i],
+                cb[i]
+            );
+        }
+    }
+
+    #[test]
+    fn test_radon_features_shape_and_peakiness() {
+        let gray = striped(17.0, 96, 96, 8.0);
+        let f = radon_features(&gray, 96, 96);
+        assert_eq!(f.len(), 4);
+        assert!(f[0] >= 0.0 && f[0] < core::f64::consts::PI, "axis={}", f[0]);
+        // A crisp stripe pattern has a dominant axis: peakiness well above 1.
+        assert!(f[1] > 1.5, "peakiness={}", f[1]);
+    }
+
+    #[test]
+    fn test_radon_blank_image() {
+        let gray = vec![128.0f64; 64 * 64];
+        let curve = radon_curve(&gray, 64, 64);
+        for v in &curve {
+            assert!(v.abs() < 1e-9, "blank curve value {v}");
+        }
+        let f = radon_features(&gray, 64, 64);
+        assert!(f[1].abs() < 1e-12 && f[3].abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_parabolic_refine_wraps_at_fold() {
+        // A peak at bin 0 with curve[59] > curve[1] means the true peak sits
+        // on the negative side of the 0/180 fold (near 179 deg); refinement
+        // must move toward bin 59, not return the unrefined bin 0.
+        let mut curve = vec![10.0f64; RADON_BINS];
+        curve[59] = 90.0;
+        curve[0] = 100.0;
+        curve[1] = 80.0;
+        let refined = parabolic_refine(&curve, 0);
+        assert!(refined < 0.0, "refined={refined} should wrap toward bin 59");
+    }
+
+    #[test]
+    fn test_radon_top_axes_returns_refined_peaks() {
+        let gray = striped(17.0, 128, 128, 8.0);
+        let curve = radon_curve(&gray, 128, 128);
+        let axes = radon_top_axes(&curve, 4);
+        assert!(!axes.is_empty());
+        let top_deg = axes[0].to_degrees().rem_euclid(180.0);
+        assert!((top_deg - 17.0).abs() < 1.5, "top_deg={top_deg}");
+        for ax in &axes {
+            assert!(*ax >= 0.0 && *ax < core::f64::consts::PI, "axis={ax}");
+        }
+    }
+}
