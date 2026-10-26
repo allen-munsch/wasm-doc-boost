@@ -10,7 +10,9 @@ pub mod crf;
 mod email;
 mod luhn;
 mod phone;
+mod pin;
 mod ssn;
+mod track;
 
 /// Categories of personally identifiable / payment card information.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,6 +44,13 @@ pub enum HitKind {
     Name = 10,
     /// US 5-digit ZIP code (isolated, not part of a longer number).
     Zip = 11,
+    /// Full magnetic-stripe track data (Track 1 `%B...?` or Track 2 `;...?`),
+    /// containing a Luhn-validated PAN.
+    TrackData = 12,
+    /// Card PIN: 4-6 isolated digits near a "PIN" keyword.
+    Pin = 13,
+    /// ISO 9564 PIN block: 16 hex chars near a "PIN block" keyword.
+    PinBlock = 14,
 }
 
 /// A detected PII/PCI hit within the scanned text.
@@ -92,6 +101,8 @@ pub fn scan(text: &str) -> Vec<Hit> {
     ssn::scan_ssn(text, &mut hits);
     luhn::scan_pan(text, &mut hits);
     context::scan_context(text, &mut hits);
+    track::scan_track(text, &mut hits);
+    pin::scan_pin(text, &mut hits);
 
     // CRF NER (if model loaded)
     // SAFETY: model is set once at startup, read-only thereafter
@@ -100,7 +111,12 @@ pub fn scan(text: &str) -> Vec<Hit> {
         if let Some(ref model) = *crf_model_ptr {
             let mut hits = crf::decode(model, text);
             // CRF handles ADDRESS, NAME, ACCOUNT — regex scanners handle PHONE, EMAIL, ZIP
-            hits.retain(|h| matches!(h.kind, HitKind::Address | HitKind::Name | HitKind::BankAccount));
+            hits.retain(|h| {
+                matches!(
+                    h.kind,
+                    HitKind::Address | HitKind::Name | HitKind::BankAccount
+                )
+            });
             hits
         } else {
             Vec::new()

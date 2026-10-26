@@ -1,6 +1,6 @@
 [package]
 name = "wasm-bridge"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 
 [lib]
@@ -8,6 +8,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 features-core = { path = "../features-core" }
+gbdt-core = { path = "../gbdt-core" }
 pii-core = { path = "../pii-core" }
 pdf-inspector-core = { path = "../pdf-inspector-core" }
 wasm-bindgen = "0.2"

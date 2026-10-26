@@ -36,7 +36,9 @@ fn scan_international_phone(text: &str, hits: &mut Vec<Hit>) {
                 paren_depth += 1;
             } else if b == b')' {
                 paren_depth -= 1;
-                if paren_depth < 0 { break; }
+                if paren_depth < 0 {
+                    break;
+                }
             } else if !b.is_ascii_digit() && b != b'-' && b != b' ' {
                 break;
             }
@@ -134,7 +136,7 @@ fn scan_raw_digit_phone(bytes: &[u8], text: &str, hits: &mut Vec<Hit>) {
         let digits = &bytes[start..i];
 
         let area_idx = match len {
-            10 => 0_usize,     // NANP: area code first
+            10 => 0_usize,                      // NANP: area code first
             11 if digits[0] == b'1' => 1_usize, // Country code 1 + NANP
             _ => continue,
         };

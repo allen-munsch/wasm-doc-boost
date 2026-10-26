@@ -158,7 +158,6 @@ pub(crate) fn extract_positioned_text_from_doc(
     extract_positioned_text_impl(doc, font_cmaps, page_filter, false, None)
 }
 
-
 fn extract_positioned_text_impl(
     doc: &Document,
     font_cmaps: &FontCMaps,

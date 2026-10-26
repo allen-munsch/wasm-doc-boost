@@ -160,6 +160,14 @@ export const ClassifySchema = z.object({
     is_paper: z.number().min(0).max(1),
     is_crumpled: z.number().min(0).max(1),
     is_shadow: z.number().min(0).max(1),
+    // Per-degree rotation rework (v2) additions.
+    flip: z.number().min(0).max(1),
+    trust: z.number().min(0).max(1),
+    // CCW rotation applied to the content (PIL convention), [0,360);
+    // rotateImageToUpright rotates CW by this to bring it upright.
+    rotation_deg: z.number().min(0).lt(360),
+    rotation_confidence: z.number().min(0).max(1),
+    needs_review: z.boolean(),
 });
 
 // Layer 0 — WASM PDF classification output (classifyPdf)
@@ -195,6 +203,7 @@ export const PiiHitSchema = z.object({
     kind: z.enum([
         'PAN', 'SSN', 'PHONE', 'EMAIL', 'CVV', 'EXPIRY',
         'ROUTING', 'ACCOUNT', 'DOB', 'ADDRESS', 'NAME', 'ZIP',
+        'TRACK', 'PIN', 'PIN_BLOCK',
     ]),
     text: z.string(),
     start: z.number().int().nonnegative(),

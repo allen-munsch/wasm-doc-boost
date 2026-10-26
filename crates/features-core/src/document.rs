@@ -68,7 +68,7 @@ fn otsu_threshold(gray: &[f64]) -> f64 {
 
 /// Connected component analysis on binary image.
 /// Returns Vec of (pixel_count, x_min, x_max, y_min, y_max) for each component.
-fn connected_components(
+pub fn connected_components(
     binary: &[bool],
     width: usize,
     height: usize,
@@ -102,14 +102,10 @@ fn connected_components(
                 y_min = y_min.min(cy);
                 y_max = y_max.max(cy);
 
-                for &(dx, dy) in &[(0isize, 1isize),(0,-1),(1,0),(-1,0)] {
+                for &(dx, dy) in &[(0isize, 1isize), (0, -1), (1, 0), (-1, 0)] {
                     let nx = cx as isize + dx;
                     let ny = cy as isize + dy;
-                    if nx >= 0
-                        && nx < width as isize
-                        && ny >= 0
-                        && ny < height as isize
-                    {
+                    if nx >= 0 && nx < width as isize && ny >= 0 && ny < height as isize {
                         let nidx = ny as usize * width + nx as usize;
                         if binary[nidx] && labels[nidx] == -1 {
                             labels[nidx] = next_label;
@@ -209,11 +205,7 @@ pub fn document_features(pixels: &[u8], width: usize, height: usize) -> Vec<f64>
 /// Mean and std of horizontal run lengths of foreground pixels.
 /// Documents have long horizontal text lines; natural images have shorter,
 /// more irregular runs.
-fn horizontal_run_length_stats(
-    binary: &[bool],
-    width: usize,
-    height: usize,
-) -> (f64, f64) {
+fn horizontal_run_length_stats(binary: &[bool], width: usize, height: usize) -> (f64, f64) {
     let mut run_lengths: Vec<f64> = Vec::new();
     for y in 0..height {
         let row_start = y * width;
@@ -237,7 +229,11 @@ fn horizontal_run_length_stats(
     }
     let n = run_lengths.len() as f64;
     let mean = run_lengths.iter().sum::<f64>() / n;
-    let variance = run_lengths.iter().map(|&x| (x - mean) * (x - mean)).sum::<f64>() / n;
+    let variance = run_lengths
+        .iter()
+        .map(|&x| (x - mean) * (x - mean))
+        .sum::<f64>()
+        / n;
     (mean, libm::sqrt(variance))
 }
 
@@ -260,8 +256,11 @@ fn vertical_projection_std(binary: &[bool], width: usize, height: usize) -> f64 
         total += count;
     }
     let mean = total / height as f64;
-    let variance =
-        row_counts.iter().map(|&c| (c - mean) * (c - mean)).sum::<f64>() / height as f64;
+    let variance = row_counts
+        .iter()
+        .map(|&c| (c - mean) * (c - mean))
+        .sum::<f64>()
+        / height as f64;
     libm::sqrt(variance)
 }
 
@@ -349,19 +348,15 @@ fn saturation_edge_ratio(pixels: &[u8], width: usize, height: usize) -> f64 {
     let mut edge_mags = vec![0.0f64; n];
     for y in 1..height as isize - 1 {
         for x in 1..width as isize - 1 {
-            let gx = pixel_at(&gray, width, height, x + 1, y)
-                - pixel_at(&gray, width, height, x - 1, y);
-            let gy = pixel_at(&gray, width, height, x, y + 1)
-                - pixel_at(&gray, width, height, x, y - 1);
+            let gx =
+                pixel_at(&gray, width, height, x + 1, y) - pixel_at(&gray, width, height, x - 1, y);
+            let gy =
+                pixel_at(&gray, width, height, x, y + 1) - pixel_at(&gray, width, height, x, y - 1);
             edge_mags[y as usize * width + x as usize] = sqrt(gx * gx + gy * gy);
         }
     }
 
-    let edge_threshold = edge_mags
-        .iter()
-        .cloned()
-        .fold(0.0f64, f64::max)
-        * 0.3;
+    let edge_threshold = edge_mags.iter().cloned().fold(0.0f64, f64::max) * 0.3;
 
     let mut low_edge_sat_sum = 0.0;
     let mut low_edge_count = 0u32;

@@ -1,6 +1,6 @@
+use crate::pixel_at;
 use alloc::vec::Vec;
 use libm::sqrt;
-use crate::pixel_at;
 
 // ---------------------------------------------------------------------------
 // 2f: Crumple detection features
@@ -66,10 +66,7 @@ pub fn lbp_variance(gray: &[f64], width: usize, height: usize) -> Vec<f64> {
     if total_weight < 1e-10 {
         return alloc::vec![0.0; 10];
     }
-    weighted_bins
-        .iter()
-        .map(|&b| b / total_weight)
-        .collect()
+    weighted_bins.iter().map(|&b| b / total_weight).collect()
 }
 
 fn ri_lbp(pattern: u8) -> u8 {
@@ -150,7 +147,6 @@ pub fn edge_density_std(gray: &[f64], width: usize, height: usize) -> f64 {
 
 /// Texture anisotropy: ratio of GLCM contrast in vertical vs. horizontal direction.
 pub fn texture_anisotropy(gray: &[f64], width: usize, height: usize) -> f64 {
-
     // Quantize to 16 levels
     let min_val = gray.iter().cloned().fold(f64::INFINITY, f64::min);
     let max_val = gray.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
@@ -173,13 +169,7 @@ pub fn texture_anisotropy(gray: &[f64], width: usize, height: usize) -> f64 {
     contrast_v / contrast_h
 }
 
-fn glcm_contrast(
-    q: &[usize],
-    width: usize,
-    height: usize,
-    dx: isize,
-    dy: isize,
-) -> f64 {
+fn glcm_contrast(q: &[usize], width: usize, height: usize, dx: isize, dy: isize) -> f64 {
     let mut glcm = [0u32; 16 * 16];
     let mut count = 0u32;
 
@@ -260,10 +250,7 @@ pub fn peak_local_entropy(gray: &[f64], width: usize, height: usize) -> f64 {
         .cloned()
         .fold(f64::INFINITY, f64::min)
         .max(0.001);
-    let max_e = entropies
-        .iter()
-        .cloned()
-        .fold(f64::NEG_INFINITY, f64::max);
+    let max_e = entropies.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
 
     max_e / min_e
 }

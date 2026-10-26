@@ -9,12 +9,11 @@
 //!   - label_weights: per-label weight vectors \[K\]\[F\]
 //!   - transitions: transition score matrix \[K\]\[K\]
 
-use alloc::format;
+use crate::{Hit, HitKind};
 use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec;
 use alloc::vec::Vec;
-use crate::{Hit, HitKind};
 
 /// A loaded CRF model ready for inference.
 pub struct CrfModel {
@@ -84,13 +83,56 @@ fn token_shape(token: &str) -> String {
 fn is_street_suffix(lower: &str) -> bool {
     matches!(
         lower,
-        "street" | "st" | "st." | "avenue" | "ave" | "ave." | "road" | "rd" | "rd."
-            | "drive" | "dr" | "dr." | "lane" | "ln" | "ln." | "court" | "ct" | "ct."
-            | "boulevard" | "blvd" | "blvd." | "way" | "place" | "pl" | "pl."
-            | "causeway" | "cswy" | "highway" | "hwy" | "parkway" | "pkwy"
-            | "circle" | "cir" | "trail" | "trl" | "suite" | "ste" | "apt" | "unit"
-            | "po" | "p.o." | "box"
-            | "terrace" | "ter" | "ter." | "square" | "sq" | "plaza" | "plz" | "mall"
+        "street"
+            | "st"
+            | "st."
+            | "avenue"
+            | "ave"
+            | "ave."
+            | "road"
+            | "rd"
+            | "rd."
+            | "drive"
+            | "dr"
+            | "dr."
+            | "lane"
+            | "ln"
+            | "ln."
+            | "court"
+            | "ct"
+            | "ct."
+            | "boulevard"
+            | "blvd"
+            | "blvd."
+            | "way"
+            | "place"
+            | "pl"
+            | "pl."
+            | "causeway"
+            | "cswy"
+            | "highway"
+            | "hwy"
+            | "parkway"
+            | "pkwy"
+            | "circle"
+            | "cir"
+            | "trail"
+            | "trl"
+            | "suite"
+            | "ste"
+            | "apt"
+            | "unit"
+            | "po"
+            | "p.o."
+            | "box"
+            | "terrace"
+            | "ter"
+            | "ter."
+            | "square"
+            | "sq"
+            | "plaza"
+            | "plz"
+            | "mall"
     )
 }
 
@@ -111,17 +153,47 @@ fn is_state_abbrev(upper: &str) -> bool {
 fn is_direction_word(lower: &str) -> bool {
     matches!(
         lower,
-        "n" | "s" | "e" | "w" | "north" | "south" | "east" | "west"
-            | "ne" | "nw" | "se" | "sw" | "n.e." | "n.w." | "s.e." | "s.w."
-            | "northeast" | "northwest" | "southeast" | "southwest"
+        "n" | "s"
+            | "e"
+            | "w"
+            | "north"
+            | "south"
+            | "east"
+            | "west"
+            | "ne"
+            | "nw"
+            | "se"
+            | "sw"
+            | "n.e."
+            | "n.w."
+            | "s.e."
+            | "s.w."
+            | "northeast"
+            | "northwest"
+            | "southeast"
+            | "southwest"
     )
 }
 
 fn is_title_prefix(lower: &str) -> bool {
     matches!(
         lower,
-        "mr" | "mr." | "mrs" | "mrs." | "ms" | "ms." | "miss" | "dr" | "dr."
-            | "prof" | "prof." | "sr" | "sr." | "jr" | "jr." | "md" | "phd"
+        "mr" | "mr."
+            | "mrs"
+            | "mrs."
+            | "ms"
+            | "ms."
+            | "miss"
+            | "dr"
+            | "dr."
+            | "prof"
+            | "prof."
+            | "sr"
+            | "sr."
+            | "jr"
+            | "jr."
+            | "md"
+            | "phd"
     )
 }
 
@@ -152,10 +224,7 @@ fn has_address_signal(text: &str) -> bool {
     }
     // State abbreviation in text
     for word in text.split_whitespace() {
-        if word.len() == 2
-            && word.chars().all(|c| c.is_uppercase())
-            && is_state_abbrev(word)
-        {
+        if word.len() == 2 && word.chars().all(|c| c.is_uppercase()) && is_state_abbrev(word) {
             return true;
         }
     }
@@ -193,10 +262,7 @@ fn extract_name_prefix(address_text: &str) -> Option<usize> {
     let mut addr_start = None;
     for (i, w) in words.iter().enumerate() {
         let core = w.trim_end_matches(|c: char| c == ',' || c == '.');
-        if !core.is_empty()
-            && core.starts_with(|c: char| c.is_ascii_digit())
-            && core.len() <= 5
-        {
+        if !core.is_empty() && core.starts_with(|c: char| c.is_ascii_digit()) && core.len() <= 5 {
             addr_start = Some(i);
             break;
         }
@@ -269,11 +335,36 @@ fn has_name_signal(text: &str) -> bool {
     // (e.g. "bank" should not reject surname "Banks")
     let lower_words: Vec<&str> = lower.split_whitespace().collect();
     for kw in &[
-        "invoice", "date", "due", "total", "payment", "terms", "conditions",
-        "note", "order", "table", "logo", "number", "discount", "tax",
-        "subtotal", "ship", "shipped", "courier", "bank", "swift", "code",
-        "branch", "account", "site", "http", "www.",
-        "address", "thank", "gstin", "email",
+        "invoice",
+        "date",
+        "due",
+        "total",
+        "payment",
+        "terms",
+        "conditions",
+        "note",
+        "order",
+        "table",
+        "logo",
+        "number",
+        "discount",
+        "tax",
+        "subtotal",
+        "ship",
+        "shipped",
+        "courier",
+        "bank",
+        "swift",
+        "code",
+        "branch",
+        "account",
+        "site",
+        "http",
+        "www.",
+        "address",
+        "thank",
+        "gstin",
+        "email",
     ] {
         for w in &lower_words {
             let w_clean = w.trim_end_matches(|c: char| c == ',' || c == '.');
@@ -365,11 +456,7 @@ fn feature_id(model: &CrfModel, name: &str) -> Option<usize> {
 
 /// Extract CRF features for a token at position `i`.
 /// Returns a sparse list of (feature_index, value=1.0) pairs.
-fn extract_token_features(
-    model: &CrfModel,
-    tokens: &[&str],
-    i: usize,
-) -> Vec<(usize, f32)> {
+fn extract_token_features(model: &CrfModel, tokens: &[&str], i: usize) -> Vec<(usize, f32)> {
     let t = tokens[i];
     let mut feats = Vec::new();
 
@@ -397,19 +484,56 @@ fn extract_token_features(
     let w_len = alloc::format!("w_len:{}", t.len().min(20));
     add(&w_len);
 
-    let w_upper = alloc::format!("w_upper:{}", if t.chars().all(|c| c.is_uppercase()) { "1" } else { "0" });
+    let w_upper = alloc::format!(
+        "w_upper:{}",
+        if t.chars().all(|c| c.is_uppercase()) {
+            "1"
+        } else {
+            "0"
+        }
+    );
     add(&w_upper);
 
-    let w_title = alloc::format!("w_title:{}", if t.chars().next().is_some_and(|c| c.is_uppercase()) && t.chars().skip(1).all(|c| c.is_lowercase()) { "1" } else { "0" });
+    let w_title = alloc::format!(
+        "w_title:{}",
+        if t.chars().next().is_some_and(|c| c.is_uppercase())
+            && t.chars().skip(1).all(|c| c.is_lowercase())
+        {
+            "1"
+        } else {
+            "0"
+        }
+    );
     add(&w_title);
 
-    let w_digit = alloc::format!("w_digit:{}", if t.chars().all(|c| c.is_ascii_digit()) { "1" } else { "0" });
+    let w_digit = alloc::format!(
+        "w_digit:{}",
+        if t.chars().all(|c| c.is_ascii_digit()) {
+            "1"
+        } else {
+            "0"
+        }
+    );
     add(&w_digit);
 
-    let w_alpha = alloc::format!("w_alpha:{}", if t.chars().all(|c| c.is_alphabetic()) { "1" } else { "0" });
+    let w_alpha = alloc::format!(
+        "w_alpha:{}",
+        if t.chars().all(|c| c.is_alphabetic()) {
+            "1"
+        } else {
+            "0"
+        }
+    );
     add(&w_alpha);
 
-    let w_has_digit = alloc::format!("w_has_digit:{}", if t.chars().any(|c| c.is_ascii_digit()) { "1" } else { "0" });
+    let w_has_digit = alloc::format!(
+        "w_has_digit:{}",
+        if t.chars().any(|c| c.is_ascii_digit()) {
+            "1"
+        } else {
+            "0"
+        }
+    );
     add(&w_has_digit);
 
     let w_has_at = alloc::format!("w_has_at:{}", if t.contains('@') { "1" } else { "0" });
@@ -418,10 +542,24 @@ fn extract_token_features(
     let w_has_hyphen = alloc::format!("w_has_hyphen:{}", if t.contains('-') { "1" } else { "0" });
     add(&w_has_hyphen);
 
-    let w_has_alpha = alloc::format!("w_has_alpha:{}", if t.chars().any(|c| c.is_alphabetic()) { "1" } else { "0" });
+    let w_has_alpha = alloc::format!(
+        "w_has_alpha:{}",
+        if t.chars().any(|c| c.is_alphabetic()) {
+            "1"
+        } else {
+            "0"
+        }
+    );
     add(&w_has_alpha);
 
-    let w_punct = alloc::format!("w_punct:{}", if !t.is_empty() && t.chars().all(|c| !c.is_alphanumeric()) { "1" } else { "0" });
+    let w_punct = alloc::format!(
+        "w_punct:{}",
+        if !t.is_empty() && t.chars().all(|c| !c.is_alphanumeric()) {
+            "1"
+        } else {
+            "0"
+        }
+    );
     add(&w_punct);
 
     // First-character type (shape prefix)
@@ -443,18 +581,53 @@ fn extract_token_features(
     add(&w_starts);
 
     // Gazetteer features for ADDRESS/NAME disambiguation
-    let tl = t.trim_end_matches(|c: char| c == ',' || c == '.').to_lowercase();
-    let w_street_suffix = alloc::format!("w_street_suffix:{}", if is_street_suffix(&tl) { "1" } else { "0" });
+    let tl = t
+        .trim_end_matches(|c: char| c == ',' || c == '.')
+        .to_lowercase();
+    let w_street_suffix = alloc::format!(
+        "w_street_suffix:{}",
+        if is_street_suffix(&tl) { "1" } else { "0" }
+    );
     add(&w_street_suffix);
-    let w_state_abbrev = alloc::format!("w_state_abbrev:{}", if t.len() == 2 && is_state_abbrev(t) { "1" } else { "0" });
+    let w_state_abbrev = alloc::format!(
+        "w_state_abbrev:{}",
+        if t.len() == 2 && is_state_abbrev(t) {
+            "1"
+        } else {
+            "0"
+        }
+    );
     add(&w_state_abbrev);
-    let w_direction = alloc::format!("w_direction:{}", if is_direction_word(&tl) { "1" } else { "0" });
+    let w_direction = alloc::format!(
+        "w_direction:{}",
+        if is_direction_word(&tl) { "1" } else { "0" }
+    );
     add(&w_direction);
-    let w_is_bldg_num = alloc::format!("w_is_bldg_num:{}", if t.starts_with(|c: char| c.is_ascii_digit()) && t.len() <= 5 && !t.chars().all(|c| c.is_ascii_digit()) { "1" } else { "0" });
+    let w_is_bldg_num = alloc::format!(
+        "w_is_bldg_num:{}",
+        if t.starts_with(|c: char| c.is_ascii_digit())
+            && t.len() <= 5
+            && !t.chars().all(|c| c.is_ascii_digit())
+        {
+            "1"
+        } else {
+            "0"
+        }
+    );
     add(&w_is_bldg_num);
-    let w_title_prefix = alloc::format!("w_title_prefix:{}", if is_title_prefix(&tl) { "1" } else { "0" });
+    let w_title_prefix = alloc::format!(
+        "w_title_prefix:{}",
+        if is_title_prefix(&tl) { "1" } else { "0" }
+    );
     add(&w_title_prefix);
-    let w_po_box = alloc::format!("w_po_box:{}", if matches!(tl.as_str(), "po" | "p.o." | "box" | "p.o" | "pobox") { "1" } else { "0" });
+    let w_po_box = alloc::format!(
+        "w_po_box:{}",
+        if matches!(tl.as_str(), "po" | "p.o." | "box" | "p.o" | "pobox") {
+            "1"
+        } else {
+            "0"
+        }
+    );
     add(&w_po_box);
 
     // Personal name heuristic: capital-start alpha word not matching any gazetteer category
@@ -467,7 +640,8 @@ fn extract_token_features(
         && !is_title_prefix(&tl)
         && !(t.len() == 2 && is_state_abbrev(t))
         && !matches!(tl.as_str(), "po" | "p.o." | "box" | "p.o" | "pobox");
-    let w_is_name_word = alloc::format!("w_is_name_word:{}", if is_person_name { "1" } else { "0" });
+    let w_is_name_word =
+        alloc::format!("w_is_name_word:{}", if is_person_name { "1" } else { "0" });
     add(&w_is_name_word);
 
     if t.len() >= 2 {
@@ -544,10 +718,7 @@ fn label_to_kind(label: &str) -> Option<HitKind> {
 /// Returns `(label_indices, scores)` where `label_indices[i]` is
 /// the predicted label index for token `i` and `scores` is the
 /// per-token confidence.
-fn viterbi(
-    model: &CrfModel,
-    token_features: &[Vec<(usize, f32)>],
-) -> (Vec<usize>, Vec<f32>) {
+fn viterbi(model: &CrfModel, token_features: &[Vec<(usize, f32)>]) -> (Vec<usize>, Vec<f32>) {
     let k = model.labels.len();
     let n = token_features.len();
 

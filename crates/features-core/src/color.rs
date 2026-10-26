@@ -174,11 +174,7 @@ pub fn saturation_stats(pixels: &[u8], width: usize, height: usize) -> Vec<f64> 
         let min_val = r.min(g).min(b);
         let delta = max_val - min_val;
 
-        let s = if max_val > 0.0 {
-            delta / max_val
-        } else {
-            0.0
-        };
+        let s = if max_val > 0.0 { delta / max_val } else { 0.0 };
 
         let delta_s = s - sum;
         sum += delta_s / (i + 1) as f64;
@@ -243,9 +239,9 @@ mod tests {
     fn colorfulness_varied() {
         // 2x2 image with different colors
         let pixels = vec![
-            255, 0, 0,   // red
-            0, 255, 0,   // green
-            0, 0, 255,   // blue
+            255, 0, 0, // red
+            0, 255, 0, // green
+            0, 0, 255, // blue
             128, 128, 128, // gray
         ];
         let c = colorfulness(&pixels, 2, 2);

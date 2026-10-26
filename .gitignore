@@ -8,3 +8,8 @@ node_modules/
 *.onnx
 LOOP_PLAN.md
 pdf-inspector/
+
+# upstream research clones (vendored into crates/*-core; never commit)
+paddleocr-rs/
+gliner2-rs/
+pp-doclayout/

@@ -1,6 +1,6 @@
 [package]
 name = "py-features"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 
 [lib]
@@ -10,4 +10,10 @@ crate-type = ["cdylib"]
 [dependencies]
 pyo3 = { version = "0.23", features = ["extension-module", "abi3-py38"] }
 features-core = { path = "../features-core" }
+gbdt-core = { path = "../gbdt-core" }
 pdf-inspector-core = { path = "../pdf-inspector-core" }
+pii-core = { path = "../pii-core" }
+ocr-core = { path = "../ocr-core" }
+pii-span-core = { path = "../pii-span-core" }
+layout-core = { path = "../layout-core" }
+image = "0.25"

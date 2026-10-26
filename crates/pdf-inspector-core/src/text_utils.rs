@@ -57,7 +57,6 @@ pub(crate) fn is_explicit_page_number_expression(text: &str) -> bool {
     }
 }
 
-
 /// Check if a character is CJK (Chinese, Japanese, Korean).
 /// CJK languages don't use spaces between words, so word-boundary
 /// heuristics should not apply when CJK characters are involved.

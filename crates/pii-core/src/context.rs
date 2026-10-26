@@ -85,8 +85,18 @@ fn scan_zip(text: &str, hits: &mut Vec<Hit>) {
 fn scan_account(text: &str, hits: &mut Vec<Hit>) {
     let lower = text.to_lowercase();
     const KEYWORDS: &[&str] = &[
-        "gstin", "gst", "account", "acct", "bank", "routing", "swift",
-        "iban", "bsb", "sort code", "account no", "account number",
+        "gstin",
+        "gst",
+        "account",
+        "acct",
+        "bank",
+        "routing",
+        "swift",
+        "iban",
+        "bsb",
+        "sort code",
+        "account no",
+        "account number",
     ];
 
     for kw in KEYWORDS {
@@ -99,11 +109,18 @@ fn scan_account(text: &str, hits: &mut Vec<Hit>) {
             let chars: Vec<char> = slice.chars().collect();
             let mut i = 0;
             while i < chars.len() {
-                if !chars[i].is_ascii_digit() { i += 1; continue; }
+                if !chars[i].is_ascii_digit() {
+                    i += 1;
+                    continue;
+                }
                 let start = i;
-                while i < chars.len() && chars[i].is_ascii_digit() { i += 1; }
+                while i < chars.len() && chars[i].is_ascii_digit() {
+                    i += 1;
+                }
                 let len = i - start;
-                if len < 6 || len > 20 { continue; }
+                if len < 6 || len > 20 {
+                    continue;
+                }
 
                 // Convert char offset to byte offset
                 let byte_start: usize = chars[..start].iter().map(|c| c.len_utf8()).sum();
@@ -148,7 +165,8 @@ fn name_hit(text: &str, marker: &str, hits: &mut Vec<Hit>) {
         let start = pos + marker.len();
         // Find end: first newline, pipe, or comma after the name
         let remainder = &text[start..];
-        let end_offset = remainder.find('\n')
+        let end_offset = remainder
+            .find('\n')
             .or_else(|| remainder.find('|'))
             .or_else(|| remainder.find(','))
             .unwrap_or(remainder.len().min(50));
@@ -174,18 +192,23 @@ fn bill_to_hit(text: &str, marker: &str, hits: &mut Vec<Hit>) {
         let after = after.trim_start();
 
         // Find end of block: "Tel", "Email", "Site", or comma
-        let block_end = after.find("Tel ")
+        let block_end = after
+            .find("Tel ")
             .or_else(|| after.find("Email "))
             .or_else(|| after.find("Site "))
             .or_else(|| after.find(','))
             .unwrap_or(after.len().min(100));
 
         let block = &after[..block_end].trim();
-        if block.is_empty() { return; }
+        if block.is_empty() {
+            return;
+        }
 
         // Split into words and determine where the name ends
         let words: Vec<&str> = block.split_whitespace().collect();
-        if words.is_empty() { return; }
+        if words.is_empty() {
+            return;
+        }
 
         // The name is the first 2-4 alphabetic-heavy words before any digit starts
         let mut name_end_idx = 0usize;
@@ -196,10 +219,14 @@ fn bill_to_hit(text: &str, marker: &str, hits: &mut Vec<Hit>) {
                 break;
             }
             name_end_idx = i + 1;
-            if name_end_idx >= 4 { break; } // max 4 words for name
+            if name_end_idx >= 4 {
+                break;
+            } // max 4 words for name
         }
 
-        if name_end_idx == 0 { return; }
+        if name_end_idx == 0 {
+            return;
+        }
 
         let name_words = &words[..name_end_idx];
         let name_str = name_words.join(" ");
@@ -268,10 +295,17 @@ mod tests {
         let mut hits = Vec::new();
         let text = "BILL_TO Jason Roberts 645 Claudia Expressway Suite 600 South Anthonyland, OH 99813 US Tel +(414)326-1227";
         scan_context(text, &mut hits);
-        assert!(hits.iter().any(|h| h.kind == HitKind::Name && h.text == "Jason Roberts"),
-            "Expected Name hit for 'Jason Roberts', got: {:?}", hits);
-        assert!(hits.iter().any(|h| h.kind == HitKind::Address),
-            "Expected Address hit, got: {:?}", hits);
+        assert!(
+            hits.iter()
+                .any(|h| h.kind == HitKind::Name && h.text == "Jason Roberts"),
+            "Expected Name hit for 'Jason Roberts', got: {:?}",
+            hits
+        );
+        assert!(
+            hits.iter().any(|h| h.kind == HitKind::Address),
+            "Expected Address hit, got: {:?}",
+            hits
+        );
     }
 
     #[test]
@@ -279,10 +313,17 @@ mod tests {
         let mut hits = Vec::new();
         let text = "Bill to Cindy Banks 0668 Amanda Street Apt. 308 New Jeffrey, MO 07685 US Tel +(610)001-4758";
         scan_context(text, &mut hits);
-        assert!(hits.iter().any(|h| h.kind == HitKind::Name && h.text == "Cindy Banks"),
-            "Expected Name hit for 'Cindy Banks', got: {:?}", hits);
-        assert!(hits.iter().any(|h| h.kind == HitKind::Address),
-            "Expected Address hit, got: {:?}", hits);
+        assert!(
+            hits.iter()
+                .any(|h| h.kind == HitKind::Name && h.text == "Cindy Banks"),
+            "Expected Name hit for 'Cindy Banks', got: {:?}",
+            hits
+        );
+        assert!(
+            hits.iter().any(|h| h.kind == HitKind::Address),
+            "Expected Address hit, got: {:?}",
+            hits
+        );
     }
 
     #[test]
@@ -290,10 +331,17 @@ mod tests {
         let mut hits = Vec::new();
         let text = "Buyer Christian Banks III 746 Anderson Shoal Apt. 968 South Sharontown, FM 28464 US Tel +(928)499-5656";
         scan_context(text, &mut hits);
-        assert!(hits.iter().any(|h| h.kind == HitKind::Name && h.text == "Christian Banks III"),
-            "Expected Name hit for 'Christian Banks III', got: {:?}", hits);
-        assert!(hits.iter().any(|h| h.kind == HitKind::Address),
-            "Expected Address hit, got: {:?}", hits);
+        assert!(
+            hits.iter()
+                .any(|h| h.kind == HitKind::Name && h.text == "Christian Banks III"),
+            "Expected Name hit for 'Christian Banks III', got: {:?}",
+            hits
+        );
+        assert!(
+            hits.iter().any(|h| h.kind == HitKind::Address),
+            "Expected Address hit, got: {:?}",
+            hits
+        );
     }
 
     #[test]
@@ -302,7 +350,11 @@ mod tests {
         let mut hits = Vec::new();
         let text = "table Buyer Alexander Williams 6479 Smith Causeway East Camerontown, AS 38212 US Tel +(330)644-2313";
         scan_context(text, &mut hits);
-        assert!(hits.iter().any(|h| h.kind == HitKind::Name && h.text == "Alexander Williams"),
-            "Expected Name hit for 'Alexander Williams', got: {:?}", hits);
+        assert!(
+            hits.iter()
+                .any(|h| h.kind == HitKind::Name && h.text == "Alexander Williams"),
+            "Expected Name hit for 'Alexander Williams', got: {:?}",
+            hits
+        );
     }
 }

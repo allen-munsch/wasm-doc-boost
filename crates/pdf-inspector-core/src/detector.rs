@@ -1064,7 +1064,6 @@ fn embedded_font_has_cmap(doc: &Document, font_ref: lopdf::ObjectId) -> bool {
     false
 }
 
-
 /// Check if the page has at least one font that can produce decodable Unicode text.
 ///
 /// Returns true when any font on the page has:
@@ -1711,7 +1710,6 @@ pub(crate) fn analyze_page_images(doc: &Document, page_id: ObjectId) -> (bool, u
 
     (has_images, total_area, has_template_image)
 }
-
 
 /// Recursively collect image dimensions from XObject resources,
 /// including images nested inside Form XObjects.

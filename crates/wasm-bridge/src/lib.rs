@@ -2,10 +2,11 @@ use std::sync::Mutex;
 
 use wasm_bindgen::prelude::*;
 
-mod gbdt;
+use gbdt_core::{DEFAULT_TAU, LABELS_V2, Model, ModelManifest, combine_rotation};
+
 mod pdf;
 
-static MODEL: Mutex<Option<gbdt::Model>> = Mutex::new(None);
+static MODEL: Mutex<Option<Model>> = Mutex::new(None);
 
 const LABELS: [&str; 9] = [
     "is_document",
@@ -19,19 +20,52 @@ const LABELS: [&str; 9] = [
     "rotation_270",
 ];
 
+static MODEL_V2: Mutex<Option<ModelManifest>> = Mutex::new(None);
+
 #[wasm_bindgen]
 pub fn load_model(json: &str) -> Result<(), JsValue> {
-    let model = gbdt::Model::from_xgboost_json(json, 9)
-        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let model = Model::from_xgboost_json(json, 9).map_err(|e| JsValue::from_str(&e.to_string()))?;
     let mut guard = MODEL.lock().unwrap();
     *guard = Some(model);
     Ok(())
 }
 
+/// Load the per-degree rework model manifest (v3; format-compatible with v2).
+///
+/// Expects the v3 `model.json` shape `{labels, tau, version, trees}` written by
+/// `train_model_v2.py`. Also accepts a legacy flat tree array for
+/// compatibility, but then the 7-label count and the default tau apply.
+#[wasm_bindgen]
+pub fn load_model_v2(json: &str) -> Result<(), JsValue> {
+    let manifest = ModelManifest::from_json(json).map_err(|e| JsValue::from_str(&e.to_string()))?;
+    if manifest.labels.len() != LABELS_V2.len() {
+        return Err(JsValue::from_str(&format!(
+            "manifest must have {} labels, got {}: {:?}",
+            LABELS_V2.len(),
+            manifest.labels.len(),
+            manifest.labels
+        )));
+    }
+    let mut guard = MODEL_V2.lock().unwrap();
+    *guard = Some(manifest);
+    Ok(())
+}
+
+/// Manifest version of the loaded model (0 when unset or not loaded).
+#[wasm_bindgen]
+pub fn model_version() -> u32 {
+    MODEL_V2
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|m| m.version)
+        .unwrap_or(0)
+}
+
 /// Scan text for PII/PCI (credit card numbers, SSNs, emails, phones).
 ///
 /// Returns a JavaScript array of hit objects:
-///   [{kind: "PAN"|"SSN"|"PHONE"|"EMAIL"|"CVV"|"EXPIRY"|"ROUTING"|"ACCOUNT"|"DOB",
+///   [{kind: "PAN"|"SSN"|"PHONE"|"EMAIL"|"CVV"|"EXPIRY"|"ROUTING"|"ACCOUNT"|"DOB"|"TRACK"|"PIN"|"PIN_BLOCK",
 ///     text: "matched string", start: byte_offset, end: byte_offset}, ...]
 #[wasm_bindgen]
 pub fn scan_pii(text: &str) -> Result<JsValue, JsValue> {
@@ -54,6 +88,9 @@ pub fn scan_pii(text: &str) -> Result<JsValue, JsValue> {
             HitKind::Address => "ADDRESS",
             HitKind::Name => "NAME",
             HitKind::Zip => "ZIP",
+            HitKind::TrackData => "TRACK",
+            HitKind::Pin => "PIN",
+            HitKind::PinBlock => "PIN_BLOCK",
         };
         js_sys::Reflect::set(
             &obj,
@@ -106,7 +143,8 @@ pub fn load_crf_model(json: &str) -> Result<(), JsValue> {
 
     // Parse featureIndex: {"feature_name": 0, ...}
     let fi = &parsed["featureIndex"];
-    let fi_obj = fi.as_object()
+    let fi_obj = fi
+        .as_object()
         .ok_or_else(|| JsValue::from_str("CRF model: missing 'featureIndex' object"))?;
 
     let mut feature_index: Vec<(String, usize)> = Vec::with_capacity(fi_obj.len());
@@ -117,7 +155,8 @@ pub fn load_crf_model(json: &str) -> Result<(), JsValue> {
 
     // Parse labelWeights: {"O": [0.1, 0.2, ...], "ADDRESS": [...], ...}
     let lw = &parsed["labelWeights"];
-    let lw_obj = lw.as_object()
+    let lw_obj = lw
+        .as_object()
         .ok_or_else(|| JsValue::from_str("CRF model: missing 'labelWeights' object"))?;
 
     let num_features = feature_index.len();
@@ -138,14 +177,16 @@ pub fn load_crf_model(json: &str) -> Result<(), JsValue> {
 
     // Parse transitions: [[0.1, 0.2, ...], [0.3, 0.4, ...], ...]
     let t = &parsed["transitions"];
-    let t_arr = t.as_array()
+    let t_arr = t
+        .as_array()
         .ok_or_else(|| JsValue::from_str("CRF model: missing 'transitions' array"))?;
 
     let k = labels.len();
     let mut transitions: Vec<Vec<f32>> = Vec::with_capacity(k);
     for row_val in t_arr {
         if let Some(row_arr) = row_val.as_array() {
-            let row: Vec<f32> = row_arr.iter()
+            let row: Vec<f32> = row_arr
+                .iter()
                 .take(k)
                 .map(|v| v.as_f64().unwrap_or(0.0) as f32)
                 .collect();
@@ -205,9 +246,59 @@ pub fn classify_file(bytes: &[u8]) -> Result<JsValue, JsValue> {
 
     let result = js_sys::Object::new();
     for (label, &pred) in LABELS.iter().zip(preds.iter()) {
-        js_sys::Reflect::set(&result, &JsValue::from_str(label), &JsValue::from_f64(pred))
-            .unwrap();
+        js_sys::Reflect::set(&result, &JsValue::from_str(label), &JsValue::from_f64(pred)).unwrap();
     }
+
+    Ok(result.into())
+}
+
+/// Per-degree rotation classification (v2): 5 doc traits + flip + trust +
+/// deterministic `rotation_deg`, `rotation_confidence`, `needs_review`.
+#[wasm_bindgen]
+pub fn classify_file_v2(bytes: &[u8]) -> Result<JsValue, JsValue> {
+    let guard = MODEL_V2.lock().unwrap();
+    let manifest = guard
+        .as_ref()
+        .ok_or_else(|| JsValue::from_str("Model not loaded — call load_model_v2 first"))?;
+    let tau = if manifest.tau.is_finite() && manifest.tau > 0.0 {
+        manifest.tau
+    } else {
+        DEFAULT_TAU
+    };
+    let model = &manifest.model;
+
+    let img = image::load_from_memory(bytes)
+        .map_err(|e| JsValue::from_str(&format!("Image decode error: {e}")))?;
+
+    let img = resize_max_edge(img, 512);
+    let rgb = img.to_rgb8();
+    let (width, height) = rgb.dimensions();
+    let pixels = rgb.into_raw();
+
+    let features = features_core::extract_all_v2(&pixels, width as usize, height as usize);
+    let preds = model.predict(&features);
+    let (rotation_deg, rotation_confidence, needs_review) =
+        combine_rotation(&features, &preds, tau);
+
+    let result = js_sys::Object::new();
+    for (label, &pred) in manifest.labels.iter().zip(preds.iter()) {
+        js_sys::Reflect::set(&result, &JsValue::from_str(label), &JsValue::from_f64(pred)).unwrap();
+    }
+    js_sys::Reflect::set(
+        &result,
+        &JsValue::from_str("rotation_deg"),
+        &JsValue::from_f64(rotation_deg),
+    )?;
+    js_sys::Reflect::set(
+        &result,
+        &JsValue::from_str("rotation_confidence"),
+        &JsValue::from_f64(rotation_confidence),
+    )?;
+    js_sys::Reflect::set(
+        &result,
+        &JsValue::from_str("needs_review"),
+        &JsValue::from_bool(needs_review),
+    )?;
 
     Ok(result.into())
 }
@@ -218,7 +309,9 @@ pub fn classify_file(bytes: &[u8]) -> Result<JsValue, JsValue> {
 #[wasm_bindgen]
 pub fn bench_sobel(width: usize, height: usize, iterations: u32) -> Result<JsValue, JsValue> {
     let n = width * height;
-    let gray: Vec<f64> = (0..n).map(|i| (i as f64 * 0.3).sin() * 128.0 + 128.0).collect();
+    let gray: Vec<f64> = (0..n)
+        .map(|i| (i as f64 * 0.3).sin() * 128.0 + 128.0)
+        .collect();
 
     // Warm up
     features_core::edges::sobel(&gray, width, height);
@@ -235,15 +328,43 @@ pub fn bench_sobel(width: usize, height: usize, iterations: u32) -> Result<JsVal
     }
     let scalar_us = (js_sys::Date::now() - t0) * 1000.0 / iterations as f64;
 
-    let speedup = if simd_us > 0.0 { scalar_us / simd_us } else { 1.0 };
+    let speedup = if simd_us > 0.0 {
+        scalar_us / simd_us
+    } else {
+        1.0
+    };
 
     let result = js_sys::Object::new();
-    js_sys::Reflect::set(&result, &JsValue::from_str("simd_us"), &JsValue::from_f64(simd_us))?;
-    js_sys::Reflect::set(&result, &JsValue::from_str("scalar_us"), &JsValue::from_f64(scalar_us))?;
-    js_sys::Reflect::set(&result, &JsValue::from_str("speedup"), &JsValue::from_f64(speedup))?;
-    js_sys::Reflect::set(&result, &JsValue::from_str("pixels"), &JsValue::from_f64(n as f64))?;
-    js_sys::Reflect::set(&result, &JsValue::from_str("width"), &JsValue::from_f64(width as f64))?;
-    js_sys::Reflect::set(&result, &JsValue::from_str("height"), &JsValue::from_f64(height as f64))?;
+    js_sys::Reflect::set(
+        &result,
+        &JsValue::from_str("simd_us"),
+        &JsValue::from_f64(simd_us),
+    )?;
+    js_sys::Reflect::set(
+        &result,
+        &JsValue::from_str("scalar_us"),
+        &JsValue::from_f64(scalar_us),
+    )?;
+    js_sys::Reflect::set(
+        &result,
+        &JsValue::from_str("speedup"),
+        &JsValue::from_f64(speedup),
+    )?;
+    js_sys::Reflect::set(
+        &result,
+        &JsValue::from_str("pixels"),
+        &JsValue::from_f64(n as f64),
+    )?;
+    js_sys::Reflect::set(
+        &result,
+        &JsValue::from_str("width"),
+        &JsValue::from_f64(width as f64),
+    )?;
+    js_sys::Reflect::set(
+        &result,
+        &JsValue::from_str("height"),
+        &JsValue::from_f64(height as f64),
+    )?;
 
     Ok(result.into())
 }
@@ -251,6 +372,7 @@ pub fn bench_sobel(width: usize, height: usize, iterations: u32) -> Result<JsVal
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gbdt_core::RADON_AXIS_INDEX;
     use wasm_bindgen_test::*;
 
     /// Trivial 9-label model: one tree per label, each always returning leaf 0.0
@@ -287,14 +409,28 @@ mod tests {
         let png_bytes = create_test_image();
         let result = classify_file(&png_bytes).unwrap();
 
-        let labels = ["is_document", "is_digital", "is_paper", "is_crumpled", "is_shadow",
-                       "rotation_0", "rotation_90", "rotation_180", "rotation_270"];
+        let labels = [
+            "is_document",
+            "is_digital",
+            "is_paper",
+            "is_crumpled",
+            "is_shadow",
+            "rotation_0",
+            "rotation_90",
+            "rotation_180",
+            "rotation_270",
+        ];
         for label in &labels {
             let val = js_sys::Reflect::get(&result, &JsValue::from_str(label))
                 .unwrap()
                 .as_f64()
                 .unwrap();
-            assert!((val - 0.5).abs() < 0.01, "{}: expected ~0.5, got {}", label, val);
+            assert!(
+                (val - 0.5).abs() < 0.01,
+                "{}: expected ~0.5, got {}",
+                label,
+                val
+            );
         }
     }
 
@@ -331,13 +467,127 @@ mod tests {
     fn test_feature_count() {
         let pixels = vec![128u8; 64 * 64 * 3];
         let feats = extract_all(&pixels, 64, 64);
-        assert_eq!(feats.len(), 103, "expected 103 features, got {}", feats.len());
+        assert_eq!(
+            feats.len(),
+            103,
+            "expected 103 features, got {}",
+            feats.len()
+        );
     }
 
     #[test]
     fn test_feature_count_native() {
         let pixels = vec![128u8; 64 * 64 * 3];
         let feats = extract_all(&pixels, 64, 64);
-        assert_eq!(feats.len(), 103, "expected 103 features, got {}", feats.len());
+        assert_eq!(
+            feats.len(),
+            103,
+            "expected 103 features, got {}",
+            feats.len()
+        );
+    }
+
+    #[test]
+    fn test_extract_all_v2_feature_count_native() {
+        let pixels = vec![128u8; 64 * 64 * 3];
+        let feats = features_core::extract_all_v2(&pixels, 64, 64);
+        assert_eq!(
+            feats.len(),
+            116,
+            "expected 116 features, got {}",
+            feats.len()
+        );
+    }
+
+    #[test]
+    fn test_combine_rotation_matches_python_formula() {
+        // axis = 17 deg, flip=0 -> rotation = (180-17) mod 180 = 163.
+        let mut features = vec![0.0f64; 116];
+        features[RADON_AXIS_INDEX] = 17.0_f64.to_radians();
+
+        let preds = [0.9, 0.0, 0.0, 0.0, 0.0, 0.1, 0.8];
+        let (deg, conf, review) = combine_rotation(&features, &preds, 0.9);
+        assert!((deg - 163.0).abs() < 1e-9, "deg={deg}");
+        assert!((conf - 0.8 * 0.9).abs() < 1e-12, "conf={conf}");
+        assert!(review, "conf 0.72 < tau 0.9 must review");
+
+        // flip=1 -> rotation = 163 + 180 = 343.
+        let preds = [1.0, 0.0, 0.0, 0.0, 0.0, 0.9, 1.0];
+        let (deg, conf, review) = combine_rotation(&features, &preds, 0.5);
+        assert!((deg - 343.0).abs() < 1e-9, "deg={deg}");
+        assert!((conf - 0.9).abs() < 1e-12, "conf={conf}");
+        assert!(!review, "conf 0.9 >= tau 0.5 and is_document");
+
+        // Not a document -> review regardless of confidence.
+        let preds = [0.1, 0.0, 0.0, 0.0, 0.0, 0.9, 1.0];
+        let (_, _, review) = combine_rotation(&features, &preds, 0.0);
+        assert!(review, "not is_document must force review");
+
+        // axis exactly 0, flip=0 -> rotation = 0 (upright).
+        features[RADON_AXIS_INDEX] = 0.0;
+        let preds = [1.0, 0.0, 0.0, 0.0, 0.0, 0.1, 1.0];
+        let (deg, _, _) = combine_rotation(&features, &preds, 0.5);
+        assert!((deg - 0.0).abs() < 1e-9, "deg={deg}");
+    }
+
+    const TRIVIAL_MANIFEST_V2: &str = r#"{
+        "labels": ["is_document","is_digital","is_paper","is_crumpled","is_shadow","flip","trust"],
+        "tau": 0.9,
+        "trees": [
+            [{"nodeid": 0, "depth": 0, "leaf": 0.0}],
+            [{"nodeid": 0, "depth": 0, "leaf": 0.0}],
+            [{"nodeid": 0, "depth": 0, "leaf": 0.0}],
+            [{"nodeid": 0, "depth": 0, "leaf": 0.0}],
+            [{"nodeid": 0, "depth": 0, "leaf": 0.0}],
+            [{"nodeid": 0, "depth": 0, "leaf": 0.0}],
+            [{"nodeid": 0, "depth": 0, "leaf": 0.0}]
+        ]
+    }"#;
+
+    #[wasm_bindgen_test]
+    fn test_classify_file_v2_returns_v2_shape() {
+        load_model_v2(TRIVIAL_MANIFEST_V2).unwrap();
+        let png_bytes = create_test_image();
+        let result = classify_file_v2(&png_bytes).unwrap();
+
+        let labels = [
+            "is_document",
+            "is_digital",
+            "is_paper",
+            "is_crumpled",
+            "is_shadow",
+            "flip",
+            "trust",
+        ];
+        for label in &labels {
+            let val = js_sys::Reflect::get(&result, &JsValue::from_str(label))
+                .unwrap()
+                .as_f64()
+                .unwrap();
+            assert!(
+                (val - 0.5).abs() < 0.01,
+                "{}: expected ~0.5, got {}",
+                label,
+                val
+            );
+        }
+
+        let deg = js_sys::Reflect::get(&result, &JsValue::from_str("rotation_deg"))
+            .unwrap()
+            .as_f64()
+            .unwrap();
+        assert!(deg >= 0.0 && deg < 360.0, "rotation_deg={deg}");
+
+        let conf = js_sys::Reflect::get(&result, &JsValue::from_str("rotation_confidence"))
+            .unwrap()
+            .as_f64()
+            .unwrap();
+        assert!((conf - 0.25).abs() < 0.01, "confidence={conf}");
+
+        let review = js_sys::Reflect::get(&result, &JsValue::from_str("needs_review"))
+            .unwrap()
+            .as_bool()
+            .unwrap();
+        assert!(review, "conf 0.25 < tau 0.9 must review");
     }
 }

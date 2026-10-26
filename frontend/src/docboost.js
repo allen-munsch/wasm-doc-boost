@@ -8,7 +8,7 @@
 //
 // Init is once. analyze is per-document.
 
-import init, { load_model, classify_file, classifyPdf, extractTextWithPositions, scan_pii } from '../wasm_bridge.js';
+import init, { load_model_v2, classify_file_v2, classifyPdf, extractTextWithPositions, scan_pii } from '../wasm_bridge.js';
 import { ClassifySchema, PdfClassifySchema, PdfTextItemSchema, PiiHitSchema } from './schemas.js';
 import { normalizeTesseract, normalizeGlmOcr } from './normalize.js';
 import { mergeRegions } from './merge.js';
@@ -48,7 +48,7 @@ export async function createDocBoost(config, onProgress) {
     try {
         var resp = await fetch(config.modelPath);
         if (!resp.ok) throw new Error('HTTP ' + resp.status + ' fetching model.json');
-        load_model(await resp.text());
+        load_model_v2(await resp.text());
         report('wasm', 'ok', 'Model loaded');
     } catch (e) {
         report('wasm', 'err', 'Model load: ' + (e.message || String(e)));
@@ -130,13 +130,24 @@ export async function createDocBoost(config, onProgress) {
         // ── Step 1: Classification (sync, fast) ──
         var classification = null;
         try {
-            classification = ClassifySchema.parse(classify_file(bytes));
+            classification = ClassifySchema.parse(classify_file_v2(bytes));
         } catch (e) {
             report('classify', 'err', e.message || String(e));
         }
 
         // ── Step 2: OCR in parallel, normalize, merge ──
-        var { regions: mergedRegions, tessResult, glmResult, mergeStats } = await runOcrPipeline(imgEl, bytes);
+        // Rotate to upright before OCR only when the estimator is confident
+        // (not needs_review) and there is a non-trivial correction.
+        var ocrSource = imgEl;
+        var ocrBytes = bytes;
+        if (classification && !classification.needs_review && classification.rotation_deg !== 0) {
+            var upright = rotateImageToUpright(imgEl, classification.rotation_deg);
+            ocrSource = upright;
+            ocrBytes = await canvasToBytes(upright);
+            report('classify', 'ok', 'Rotated ' + classification.rotation_deg + ' deg before OCR');
+        }
+
+        var { regions: mergedRegions, tessResult, glmResult, mergeStats } = await runOcrPipeline(ocrSource, ocrBytes);
 
         // ── Step 5: PII scan on combined text ──
         var combinedText = mergedRegions.map(function (r) { return r.text; }).join('\n');
@@ -434,6 +445,33 @@ async function imageElementToBytes(img) {
         return canvas.toBlob(resolve, 'image/png');
     });
     return new Uint8Array(await blob.arrayBuffer());
+}
+
+/**
+ * Rotate an image so its content is upright.
+ *
+ * @param {HTMLImageElement|HTMLCanvasElement} img
+ * @param {number} rotationDeg — CCW rotation applied to the content (PIL convention), [0,360)
+ * @returns {HTMLCanvasElement} the rotated image (same object when 0)
+ */
+function rotateImageToUpright(img, rotationDeg) {
+    if (!rotationDeg) return img;
+    var rad = rotationDeg * Math.PI / 180;
+    var w = img.naturalWidth || img.width;
+    var h = img.naturalHeight || img.height;
+    var cos = Math.abs(Math.cos(rad));
+    var sin = Math.abs(Math.sin(rad));
+    var canvas = document.createElement('canvas');
+    canvas.width = Math.round(w * cos + h * sin);
+    canvas.height = Math.round(w * sin + h * cos);
+    var ctx = canvas.getContext('2d');
+    ctx.translate(canvas.width / 2, canvas.height / 2);
+    // rotation_deg is the CCW rotation the content has (PIL rotate). Canvas y
+    // is down, so positive ctx.rotate is clockwise visually; rotate CW by the
+    // same amount to bring the content back to upright.
+    ctx.rotate(rad);
+    ctx.drawImage(img, -w / 2, -h / 2);
+    return canvas;
 }
 
 function bytesToBase64(bytes) {

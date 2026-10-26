@@ -86,11 +86,10 @@ pub fn classify_pdf(data: &[u8]) -> Result<JsValue, JsValue> {
 /// Extract text items with positions from a PDF memory buffer.
 #[wasm_bindgen(js_name = extractTextWithPositions)]
 pub fn extract_text_with_positions(data: &[u8]) -> Result<JsValue, JsValue> {
-    let items =
-        pdf_inspector_core::extract_text_with_positions_mem(data)
-            .map_err(|e| js_error("extract text", e))?;
+    let items = pdf_inspector_core::extract_text_with_positions_mem(data)
+        .map_err(|e| js_error("extract text", e))?;
     let results: Vec<TextItemResult> = items.into_iter().map(Into::into).collect();
-    let value = serde_wasm_bindgen::to_value(&results)
-        .map_err(|e| js_error("serialize result", e))?;
+    let value =
+        serde_wasm_bindgen::to_value(&results).map_err(|e| js_error("serialize result", e))?;
     Ok(value)
 }

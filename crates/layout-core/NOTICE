@@ -1,0 +1,5 @@
+This crate ports the PP-DocLayoutV3 inference and postprocessing from
+xulihang/PP_DocLayout_ONNX (https://github.com/xulihang/PP_DocLayout_ONNX),
+which is distributed without a license file at the time of porting. The
+model weights (PP-DocLayoutV3.onnx) are from Bei0001/PP-DocLayoutV3-ONNX
+on Hugging Face and are not included in this repository.

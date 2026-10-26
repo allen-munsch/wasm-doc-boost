@@ -2,10 +2,10 @@
 //!
 //! **Install (prebuilt wheel, CPython 3.8+):**
 //!
-//! - Linux x86_64: `pip install https://github.com/allen-munsch/wasm-doc-boost/releases/download/v0.1.0/py_features-0.1.0-cp38-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl`
-//! - Linux aarch64: `pip install https://github.com/allen-munsch/wasm-doc-boost/releases/download/v0.1.0/py_features-0.1.0-cp38-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl`
-//! - macOS Intel (x86_64): `pip install https://github.com/allen-munsch/wasm-doc-boost/releases/download/v0.1.0/py_features-0.1.0-cp38-abi3-macosx_10_12_x86_64.whl`
-//! - macOS Apple Silicon (arm64): `pip install https://github.com/allen-munsch/wasm-doc-boost/releases/download/v0.1.0/py_features-0.1.0-cp38-abi3-macosx_11_0_arm64.whl`
+//! - Linux x86_64: `pip install https://github.com/allen-munsch/wasm-doc-boost/releases/download/v0.2.0/py_features-0.2.0-cp38-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl`
+//! - Linux aarch64: `pip install https://github.com/allen-munsch/wasm-doc-boost/releases/download/v0.2.0/py_features-0.2.0-cp38-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl`
+//! - macOS Intel (x86_64): `pip install https://github.com/allen-munsch/wasm-doc-boost/releases/download/v0.2.0/py_features-0.2.0-cp38-abi3-macosx_10_12_x86_64.whl`
+//! - macOS Apple Silicon (arm64): `pip install https://github.com/allen-munsch/wasm-doc-boost/releases/download/v0.2.0/py_features-0.2.0-cp38-abi3-macosx_11_0_arm64.whl`
 //!
 //! **From source (requires Rust):** `cd crates/py-features && pip install maturin && maturin develop --release`
 //!
@@ -39,9 +39,16 @@
 //!
 //! ---
 
+mod engines;
+
+use std::sync::Mutex;
+
+use gbdt_core::{combine_rotation, ModelManifest, DEFAULT_TAU, LABELS_V2};
+use pdf_inspector_core::{types::ItemType, PdfType};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
-use pdf_inspector_core::{PdfType, types::ItemType};
+
+static MODEL_V2: Mutex<Option<ModelManifest>> = Mutex::new(None);
 
 // ── extract_all ──────────────────────────────────────────────────────────
 
@@ -61,17 +68,116 @@ use pdf_inspector_core::{PdfType, types::ItemType};
 /// * width: `int`
 /// * height: `int`
 /// * Returns: `list[float]` (length 103)
+/// Decode an image from encoded bytes and resize to `max_edge` EXACTLY the
+/// way wasm-bridge's `resize_max_edge` does (image crate decode, Triangle
+/// filter, round-to-nearest dims). The training export must use this so the
+/// features it computes match the wasm inference path pixel-for-pixel.
+///
+/// Returns `(rgb_bytes, width, height)`.
+#[pyfunction]
+fn load_rgb_resized(encoded: Vec<u8>, max_edge: u32) -> PyResult<(Vec<u8>, usize, usize)> {
+    let img = image::load_from_memory(&encoded)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("decode: {e}")))?;
+    let (w, h) = (img.width(), img.height());
+    let longest = w.max(h);
+    let img = if longest <= max_edge {
+        img
+    } else {
+        let ratio = max_edge as f64 / longest as f64;
+        let new_w = (w as f64 * ratio).round() as u32;
+        let new_h = (h as f64 * ratio).round() as u32;
+        img.resize_exact(new_w, new_h, image::imageops::FilterType::Triangle)
+    };
+    let rgb = img.to_rgb8();
+    let (width, height) = rgb.dimensions();
+    Ok((rgb.into_raw(), width as usize, height as usize))
+}
+
 #[pyfunction]
 fn extract_all(pixels: Vec<u8>, width: usize, height: usize) -> PyResult<Vec<f64>> {
     let expected = width * height * 3;
     if pixels.len() != expected {
         return Err(pyo3::exceptions::PyValueError::new_err(format!(
             "Expected {} bytes ({}x{}x3), got {}",
-            expected, width, height, pixels.len()
+            expected,
+            width,
+            height,
+            pixels.len()
         )));
     }
 
     Ok(features_core::extract_all(&pixels, width, height))
+}
+
+/// Extract the per-degree rework feature vector: 116 heuristics
+/// (100 pre-rotation + 16 rotation signals: radon, textline flip, boundary
+/// min-area-rect, unfolded docstrum).
+///
+/// * pixels: `bytes` — RGB bytes (length must equal width × height × 3)
+/// * width: `int`
+/// * height: `int`
+/// * Returns: `list[float]` (length 116)
+#[pyfunction]
+fn extract_all_v2(pixels: Vec<u8>, width: usize, height: usize) -> PyResult<Vec<f64>> {
+    let expected = width * height * 3;
+    if pixels.len() != expected {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "Expected {} bytes ({}x{}x3), got {}",
+            expected,
+            width,
+            height,
+            pixels.len()
+        )));
+    }
+
+    Ok(features_core::extract_all_v2(&pixels, width, height))
+}
+
+/// Debug helper for the rotation rework: radon curve + textline line-quality
+/// at the top-4 local maxima of the curve.
+///
+/// Returns 60 radon-curve bins, then for each of the top-4 local maxima
+/// (highest first, parabolic-refined): [axis_rad, n_lines, total_line_ink].
+/// Used to validate the multi-candidate axis selection before wiring it into
+/// `extract_all_v2`.
+#[pyfunction]
+fn rotation_diagnostic(pixels: Vec<u8>, width: usize, height: usize) -> PyResult<Vec<f64>> {
+    let expected = width * height * 3;
+    if pixels.len() != expected {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "Expected {} bytes ({}x{}x3), got {}",
+            expected,
+            width,
+            height,
+            pixels.len()
+        )));
+    }
+    let gray = features_core::to_grayscale(&pixels, width, height);
+    let curve = features_core::radon::radon_curve(&gray, width, height);
+    let mut out = curve.clone();
+
+    // Top-4 local maxima of the 180-periodic curve.
+    let mut maxima: Vec<(usize, f64)> = Vec::new();
+    for i in 0..curve.len() {
+        let prev = curve[(i + curve.len() - 1) % curve.len()];
+        let next = curve[(i + 1) % curve.len()];
+        let v = curve[i];
+        if v >= prev && v >= next {
+            maxima.push((i, v));
+        }
+    }
+    maxima.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+    for &(bin, _) in maxima.iter().take(4) {
+        let refined = features_core::radon::parabolic_refine(&curve, bin);
+        let axis_rad = ((refined * features_core::radon::RADON_DEG_PER_BIN) % 180.0).to_radians();
+        let tl = features_core::textline::textline_flip_features_with_axis(
+            &gray, width, height, axis_rad,
+        );
+        out.push(axis_rad);
+        out.push(tl[2]); // n_lines
+        out.push(tl[3] + tl[4] + tl[5]); // asc + desc + body mass fractions
+    }
+    Ok(out)
 }
 
 // ── classify_pdf ─────────────────────────────────────────────────────────
@@ -168,6 +274,60 @@ fn extract_text_with_positions(data: Vec<u8>) -> PyResult<PyObject> {
     })
 }
 
+// ── scan_pii ─────────────────────────────────────────────────────────────
+
+/// Scan text for PII/PCI using deterministic rules.
+///
+/// ```python
+/// hits = py_features.scan_pii("Card 4111 1111 1111 1111 exp 08/27 cvv 123")
+/// # -> [{'kind': 'pan', 'text': '4111 1111 1111 1111', 'start': 5, 'end': 24}, ...]
+/// ```
+///
+/// * text: `str` — the text to scan
+/// * Returns: `list[dict]` — each dict has:
+///     - `kind`: `str` — one of `"pan"`, `"cvv"`, `"expiry"`, `"ssn"`,
+///       `"email"`, `"phone"`, `"routing"`, `"account"`, `"dob"`,
+///       `"address"`, `"name"`, `"zip"`, `"track"`, `"pin"`, `"pin_block"`
+///     - `text`: `str` — the matched text
+///     - `start`: `int` — byte offset where the match starts
+///     - `end`: `int` — byte offset where the match ends (exclusive)
+#[pyfunction]
+fn scan_pii(text: &str) -> PyResult<PyObject> {
+    use pii_core::HitKind;
+
+    let hits = pii_core::scan(text);
+
+    Python::with_gil(|py| {
+        let list = PyList::empty(py);
+        for hit in hits {
+            let dict = PyDict::new(py);
+            let kind = match hit.kind {
+                HitKind::Pan => "pan",
+                HitKind::Cvv => "cvv",
+                HitKind::Expiry => "expiry",
+                HitKind::Ssn => "ssn",
+                HitKind::Email => "email",
+                HitKind::Phone => "phone",
+                HitKind::RoutingNumber => "routing",
+                HitKind::BankAccount => "account",
+                HitKind::Dob => "dob",
+                HitKind::Address => "address",
+                HitKind::Name => "name",
+                HitKind::Zip => "zip",
+                HitKind::TrackData => "track",
+                HitKind::Pin => "pin",
+                HitKind::PinBlock => "pin_block",
+            };
+            dict.set_item("kind", kind)?;
+            dict.set_item("text", hit.text)?;
+            dict.set_item("start", hit.start as u64)?;
+            dict.set_item("end", hit.end as u64)?;
+            list.append(dict)?;
+        }
+        Ok(list.into())
+    })
+}
+
 // ── is_release_build ─────────────────────────────────────────────────────
 
 /// Check if this Rust binary was built in optimized release mode.
@@ -177,21 +337,123 @@ fn is_release_build() -> bool {
     cfg!(not(debug_assertions))
 }
 
-/// `py_features` — 4 functions, zero config.
+// ── v3 GBDT model loading + prediction ───────────────────────────────────
+
+/// Load the v3 model manifest `{labels, tau, version, trees, trees_per_label}` —
+/// the exact same JSON the frontend passes to `load_model_v2`.
+#[pyfunction]
+fn load_model_v2(json: &str) -> PyResult<()> {
+    let manifest = ModelManifest::from_json(json)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    if manifest.labels.len() != LABELS_V2.len() {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "manifest must have {} labels, got {}: {:?}",
+            LABELS_V2.len(),
+            manifest.labels.len(),
+            manifest.labels
+        )));
+    }
+    *MODEL_V2.lock().unwrap() = Some(manifest);
+    Ok(())
+}
+
+/// Manifest version of the loaded model (0 when unset or not loaded).
+#[pyfunction]
+fn model_version() -> u32 {
+    MODEL_V2
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|m| m.version)
+        .unwrap_or(0)
+}
+
+/// Score the 7 heads on raw RGB pixels and combine the deterministic radon
+/// axis with the flip/trust heads. Backend twin of the frontend's
+/// `classify_file_v2`: same features-core extraction, same gbdt-core forest.
+///
+/// * pixels: `bytes` — RGB bytes (length must equal width × height × 3)
+/// * width: `int`
+/// * height: `int`
+/// * Returns: `dict` with the 7 label probabilities plus `rotation_deg`,
+///   `rotation_confidence`, `needs_review`.
+#[pyfunction]
+fn predict_v2(pixels: Vec<u8>, width: usize, height: usize) -> PyResult<PyObject> {
+    let expected = width * height * 3;
+    if pixels.len() != expected {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "Expected {} bytes ({}x{}x3), got {}",
+            expected,
+            width,
+            height,
+            pixels.len()
+        )));
+    }
+
+    let manifest = {
+        let guard = MODEL_V2.lock().unwrap();
+        guard.as_ref().cloned().ok_or_else(|| {
+            pyo3::exceptions::PyRuntimeError::new_err("model not loaded — call load_model_v2 first")
+        })?
+    };
+
+    let features = features_core::extract_all_v2(&pixels, width, height);
+    let preds = manifest.model.predict(&features);
+    let tau = if manifest.tau.is_finite() && manifest.tau > 0.0 {
+        manifest.tau
+    } else {
+        DEFAULT_TAU
+    };
+    let (rotation_deg, rotation_confidence, needs_review) =
+        combine_rotation(&features, &preds, tau);
+
+    Python::with_gil(|py| {
+        let dict = PyDict::new(py);
+        for (label, &pred) in manifest.labels.iter().zip(preds.iter()) {
+            dict.set_item(label.as_str(), pred)?;
+        }
+        dict.set_item("rotation_deg", rotation_deg)?;
+        dict.set_item("rotation_confidence", rotation_confidence)?;
+        dict.set_item("needs_review", needs_review)?;
+        Ok(dict.into())
+    })
+}
+
+/// Expose the raw combine step for diagnostics and parity checks.
+#[pyfunction]
+fn combine_rotation_v2(features: Vec<f64>, preds: Vec<f64>, tau: f64) -> (f64, f64, bool) {
+    combine_rotation(&features, &preds, tau)
+}
+
+/// `py_features` — feature extraction, v3 GBDT prediction, PDF inspection,
+/// PII scanning, and the ONNX engines (layout, OCR, span PII) behind optional
+/// Python classes.
 ///
 /// ```python
 /// import py_features
 ///
-/// feats = py_features.extract_all(raw_rgb_bytes, width, height)
-/// result = py_features.classify_pdf(pdf_bytes)
-/// items = py_features.extract_text_with_positions(pdf_bytes)
-/// is_rel = py_features.is_release_build()
+/// feats = py_features.extract_all_v2(raw_rgb_bytes, width, height)
+/// py_features.load_model_v2(open("model.json").read())
+/// result = py_features.predict_v2(raw_rgb_bytes, width, height)
+/// pdf = py_features.classify_pdf(pdf_bytes)
+/// hits = py_features.scan_pii(text)
 /// ```
 #[pymodule]
 fn py_features(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(extract_all, m)?)?;
+    m.add_function(wrap_pyfunction!(extract_all_v2, m)?)?;
+    m.add_function(wrap_pyfunction!(load_rgb_resized, m)?)?;
+    m.add_function(wrap_pyfunction!(rotation_diagnostic, m)?)?;
     m.add_function(wrap_pyfunction!(classify_pdf, m)?)?;
     m.add_function(wrap_pyfunction!(extract_text_with_positions, m)?)?;
+    m.add_function(wrap_pyfunction!(scan_pii, m)?)?;
     m.add_function(wrap_pyfunction!(is_release_build, m)?)?;
+    m.add_function(wrap_pyfunction!(load_model_v2, m)?)?;
+    m.add_function(wrap_pyfunction!(model_version, m)?)?;
+    m.add_function(wrap_pyfunction!(predict_v2, m)?)?;
+    m.add_function(wrap_pyfunction!(combine_rotation_v2, m)?)?;
+    m.add_class::<engines::LayoutEngine>()?;
+    m.add_class::<engines::OcrEngine>()?;
+    m.add_class::<engines::PiiEngine>()?;
     Ok(())
 }

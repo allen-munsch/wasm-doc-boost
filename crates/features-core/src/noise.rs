@@ -1,7 +1,7 @@
+use crate::pixel_at;
 use alloc::vec;
 use alloc::vec::Vec;
 use libm::sqrt;
-use crate::pixel_at;
 
 // ---------------------------------------------------------------------------
 // 2d-a: High-pass residual variance (original − median-filtered 5×5)
@@ -76,9 +76,7 @@ fn blockiness_h(gray: &[f64], width: usize, height: usize) -> f64 {
                 let y = start_y + row;
                 for x in start_x..start_x + 8 {
                     if x < width && y + 1 < height {
-                        interior_diff +=
-                            (gray[y * width + x] - gray[(y + 1) * width + x])
-                                .abs();
+                        interior_diff += (gray[y * width + x] - gray[(y + 1) * width + x]).abs();
                         interior_count += 1;
                     }
                 }
@@ -88,9 +86,7 @@ fn blockiness_h(gray: &[f64], width: usize, height: usize) -> f64 {
                 let y = start_y + 7;
                 for x in start_x..start_x + 8 {
                     if x < width && y + 1 < height {
-                        boundary_diff +=
-                            (gray[y * width + x] - gray[(y + 1) * width + x])
-                                .abs();
+                        boundary_diff += (gray[y * width + x] - gray[(y + 1) * width + x]).abs();
                         boundary_count += 1;
                     }
                 }
@@ -126,9 +122,7 @@ fn blockiness_v(gray: &[f64], width: usize, height: usize) -> f64 {
                 let x = start_x + col;
                 for y in start_y..start_y + 8 {
                     if x + 1 < width && y < height {
-                        interior_diff +=
-                            (gray[y * width + x] - gray[y * width + (x + 1)])
-                                .abs();
+                        interior_diff += (gray[y * width + x] - gray[y * width + (x + 1)]).abs();
                         interior_count += 1;
                     }
                 }
@@ -138,9 +132,7 @@ fn blockiness_v(gray: &[f64], width: usize, height: usize) -> f64 {
                 let x = start_x + 7;
                 for y in start_y..start_y + 8 {
                     if x + 1 < width && y < height {
-                        boundary_diff +=
-                            (gray[y * width + x] - gray[y * width + (x + 1)])
-                                .abs();
+                        boundary_diff += (gray[y * width + x] - gray[y * width + (x + 1)]).abs();
                         boundary_count += 1;
                     }
                 }
@@ -165,7 +157,10 @@ pub fn jpeg_blockiness(gray: &[f64], width: usize, height: usize) -> Vec<f64> {
     if width < 16 || height < 16 {
         return alloc::vec![0.0, 0.0];
     }
-    alloc::vec![blockiness_h(gray, width, height), blockiness_v(gray, width, height)]
+    alloc::vec![
+        blockiness_h(gray, width, height),
+        blockiness_v(gray, width, height)
+    ]
 }
 
 // ---------------------------------------------------------------------------
@@ -183,10 +178,10 @@ pub fn gradient_snr(gray: &[f64], width: usize, height: usize) -> f64 {
     let mut count = 0u32;
     for y in 1..height as isize - 1 {
         for x in 1..width as isize - 1 {
-            let gx = pixel_at(gray, width, height, x + 1, y)
-                - pixel_at(gray, width, height, x - 1, y);
-            let gy = pixel_at(gray, width, height, x, y + 1)
-                - pixel_at(gray, width, height, x, y - 1);
+            let gx =
+                pixel_at(gray, width, height, x + 1, y) - pixel_at(gray, width, height, x - 1, y);
+            let gy =
+                pixel_at(gray, width, height, x, y + 1) - pixel_at(gray, width, height, x, y - 1);
             sum_mag += sqrt(gx * gx + gy * gy);
             count += 1;
         }

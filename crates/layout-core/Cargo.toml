@@ -1,0 +1,13 @@
+[package]
+name = "layout-core"
+version = "0.2.0"
+edition = "2021"
+description = "PP-DocLayoutV3 document layout detection via ONNX Runtime (ported from xulihang/PP_DocLayout_ONNX)"
+license = "Apache-2.0"
+
+[dependencies]
+ort = { version = "2.0.0-rc.13", default-features = false, features = [
+    "std", "ndarray", "load-dynamic", "half", "cuda",
+] }
+image = "0.25"
+anyhow = "1.0"

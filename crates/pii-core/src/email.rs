@@ -64,7 +64,8 @@ pub fn scan_email(text: &str, hits: &mut Vec<Hit>) {
             let mut j = i + 1;
             let mut saw_dot = false;
             while j < bytes.len() {
-                let valid = bytes[j].is_ascii_alphanumeric() || bytes[j] == b'.' || bytes[j] == b'-';
+                let valid =
+                    bytes[j].is_ascii_alphanumeric() || bytes[j] == b'.' || bytes[j] == b'-';
                 if !valid {
                     break;
                 }

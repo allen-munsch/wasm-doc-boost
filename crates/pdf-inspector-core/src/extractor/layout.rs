@@ -1614,8 +1614,6 @@ fn page_number_removal_mask(items: &[TextItem], document_page_count: usize) -> V
         .collect()
 }
 
-
-
 /// Remove numeric folios using complete document context before downstream
 /// non-table layout partitions could separate the evidence needed to recognize
 /// them.
@@ -1919,8 +1917,6 @@ pub(crate) fn group_into_lines_with_thresholds_and_regions(
         true,
     )
 }
-
-
 
 fn group_into_lines_with_thresholds_and_regions_impl(
     items: Vec<TextItem>,

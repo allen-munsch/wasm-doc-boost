@@ -48,11 +48,10 @@ pub use extractor::{
 pub use process_mode::ProcessMode;
 pub use types::{PdfLine, PdfRect, TextItem};
 
-use lopdf::Document;
 use log::debug;
+use lopdf::Document;
 use std::borrow::Cow;
 use std::path::Path;
-
 
 /// OCR reason emitted when the extracted text layer appears garbled due to
 /// broken font decoding or mojibake.
@@ -70,12 +69,9 @@ pub const OCR_REASON_NO_TEXT: &str = "no_text";
 /// rather than real text operators, so it cannot be extracted as characters.
 pub const OCR_REASON_VECTOR_TEXT: &str = "vector_text";
 
-
-
 // =============================================================================
 // PdfClassification
 // =============================================================================
-
 
 /// Lightweight classification result for routing decisions.
 #[derive(Debug)]
@@ -505,7 +501,6 @@ fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
     find_bytes(haystack, needle).is_some()
 }
-
 
 /// Detect markdown tables with suspicious structure that suggest the heuristic
 /// missed/mangled rows or columns. Returns true when the caller should treat

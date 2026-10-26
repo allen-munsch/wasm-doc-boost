@@ -1,7 +1,7 @@
+use crate::pixel_at;
 use alloc::vec;
 use alloc::vec::Vec;
 use libm::sqrt;
-use crate::pixel_at;
 
 // ---------------------------------------------------------------------------
 // 2e: Shadow & illumination features
@@ -69,7 +69,11 @@ fn morph_erode(gray: &[f64], width: usize, height: usize, radius: usize) -> Vec<
 /// - shadow_depth_std: std of negative deviations
 /// - shadow_edge_magnitude: mean Sobel magnitude on illumination field
 pub fn shadow_features(gray: &[f64], width: usize, height: usize) -> Vec<f64> {
-    let radius = if width.min(height) >= 21 { 10 } else { (width.min(height) as f64 * 0.1) as usize };
+    let radius = if width.min(height) >= 21 {
+        10
+    } else {
+        (width.min(height) as f64 * 0.1) as usize
+    };
     let radius = radius.max(1);
     let illum = morphological_closing(gray, width, height, radius);
     let n = gray.len() as f64;
@@ -135,13 +139,7 @@ pub fn shadow_features(gray: &[f64], width: usize, height: usize) -> Vec<f64> {
         0.0
     };
 
-    alloc::vec![
-        dark_ratio,
-        illum_var,
-        shadow_mean,
-        shadow_std,
-        shadow_edge,
-    ]
+    alloc::vec![dark_ratio, illum_var, shadow_mean, shadow_std, shadow_edge,]
 }
 
 #[cfg(test)]
