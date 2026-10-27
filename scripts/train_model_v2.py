@@ -1,22 +1,24 @@
 #!/usr/bin/env python3
-"""Train the per-degree rotation rework model (v2).
+"""Train the per-degree rotation rework model (v4).
 
 Input:  features npz from `export_parallel.py --v2` (116 features, 7 labels,
         plus rotation_deg metadata).
-Output: model.json (v3 manifest `{labels, tau, version, trees, trees_per_label}`,
+Output: model.json (v4 manifest `{labels, tau, version, trees, trees_per_label}`,
         7 heads: 5 doc traits + flip + trust), report.json.
 
 Rotation is NOT a GBDT head: the axis is the deterministic radon feature
 (index 100). The GBDT only predicts flip (P(flip)) and trust
 (P(radon axis within 1 deg)). Combined in wasm-bridge as
     axis_deg = degrees(radon_axis) mod 180; snapped to 0 when <1 or >179
-    rotation_deg = (180 - axis_deg) mod 180 + 180 * (flip >= 0.5)
-    confidence  = trust * max(flip, 1 - flip)
+    at a cardinal axis (0/90/180/270), the deterministic textline flip
+    evidence (features 104/106) overrides the GBDT flip head when strong
+    rotation_deg = (180 - axis_deg) mod 180 + 180 * flip
+    confidence  = trust * flip_confidence
     needs_review = confidence < tau (tau calibrated here) or not is_document.
 
 Usage:
     python scripts/train_model_v2.py --features data/features_v5.npz \
-        --output data/model_v3.json --report data/report_v3.json
+        --output data/model_v4.json --report data/report_v4.json
 """
 
 import argparse
@@ -292,16 +294,16 @@ def export_merged_model(models, output_path, tau):
         tree_dump = model.get_booster().get_dump(dump_format="json")
         all_trees.extend([json.loads(t)] for t in tree_dump)
         trees_per_label.append(len(tree_dump))
-    # v3 manifest: labels + pinned operating point + tree forest + exact
+    # v4 manifest: labels + pinned operating point + tree forest + exact
     # per-label tree counts. The seven heads use uneven n_estimators
     # (200/200/200/80/80/160/160), so wasm-bridge must NOT split `trees`
-    # evenly; trees_per_label tells it the exact boundaries. `version: 3`
-    # is reserved for the fold-snap combine in wasm-bridge (model_version());
-    # that combine change is verified numerically but not yet applied.
+    # evenly; trees_per_label tells it the exact boundaries. `version: 4`
+    # gates the fold-snap combine AND the deterministic textline flip gate
+    # in wasm-bridge (model_version()).
     manifest = {
         "labels": LABEL_NAMES,
         "tau": tau,
-        "version": 3,
+        "version": 4,
         "trees": all_trees,
         "trees_per_label": trees_per_label,
     }
@@ -317,8 +319,8 @@ def export_merged_model(models, output_path, tau):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--features", required=True)
-    parser.add_argument("--output", default="data/model_v3.json")
-    parser.add_argument("--report", default="data/report_v3.json")
+    parser.add_argument("--output", default="data/model_v4.json")
+    parser.add_argument("--report", default="data/report_v4.json")
     args = parser.parse_args()
 
     X, y, filenames, rotation_deg = load_data(args.features)

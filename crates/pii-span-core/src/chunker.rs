@@ -14,7 +14,7 @@
 //! common.
 //!
 //! ```no_run
-//! use gliner2_rs::{SpanConfig, SpanEngine, SchemaTask};
+//! use pii_span_core::{SpanConfig, SpanEngine, SchemaTask};
 //!
 //! let document = std::fs::read_to_string("contract.txt")?;
 //! let mut engine = SpanEngine::new(SpanConfig::new("models/g25"))?;

@@ -24,6 +24,21 @@ pub const LABELS_V2: [&str; 7] = [
 /// Index of the deterministic radon axis (radians, [0, pi)) in extract_all_v2.
 pub const RADON_AXIS_INDEX: usize = 100;
 
+/// Textline flip-evidence feature indices in extract_all_v2. The flip head can
+/// be wrong with high confidence, but these three are deterministic and nearly
+/// perfect on text with enough lines: a positive flip_score means upright,
+/// negative means 180-flipped.
+pub const FLIP_SCORE_INDEX: usize = 104;
+pub const VOTE_FRAC_INDEX: usize = 105;
+pub const N_LINES_INDEX: usize = 106;
+pub const BODY_FRAC_INDEX: usize = 109;
+
+/// Minimum number of valid text lines and minimum |flip_score| before the
+/// deterministic textline evidence overrides the GBDT flip head at a cardinal
+/// (0/90/180/270) axis. FATURA2 upright runs ~16 lines and |score| ~0.35-0.4.
+pub const FLIP_NLINES_MIN: f64 = 5.0;
+pub const FLIP_SCORE_MIN: f64 = 0.05;
+
 /// Fallback operating point if the manifest does not carry one. The shipped
 /// value is pinned in model.json's manifest by tau calibration.
 pub const DEFAULT_TAU: f64 = 0.90;
@@ -48,9 +63,44 @@ pub fn combine_rotation(features: &[f64], preds: &[f64], tau: f64) -> (f64, f64,
     }
     let flip_p = preds[5];
     let trust_p = preds[6];
-    let flip = if flip_p >= 0.5 { 1.0 } else { 0.0 };
+
+    // v4 flip gate: at a cardinal axis the deterministic textline evidence is
+    // stronger than the GBDT flip head. If there are enough valid text lines
+    // and the ascender/descender signal is unambiguous, use it directly. This
+    // is what makes upright born-digital invoices stop flipping to 180.
+    let cardinal = axis_deg == 0.0 || (axis_deg - 90.0).abs() < 1.0;
+    let (flip, flip_conf) = if cardinal {
+        let n_lines = features.get(N_LINES_INDEX).copied().unwrap_or(0.0);
+        let flip_score = features.get(FLIP_SCORE_INDEX).copied().unwrap_or(0.0);
+        let vote_frac = features.get(VOTE_FRAC_INDEX).copied().unwrap_or(0.5);
+        let body_frac = features.get(BODY_FRAC_INDEX).copied().unwrap_or(0.0);
+        let is_digital = preds.get(1).copied().unwrap_or(0.0);
+        if n_lines >= FLIP_NLINES_MIN {
+            if is_digital >= 0.5 {
+                // Born-digital documents are generated upright, so at a
+                // cardinal axis they only flip when every signal agrees the
+                // text is upside down AND the text is not all-caps/digits
+                // (body_frac >= 0.9 has no reliable ascender/descender mass,
+                // and FATURA2 all-caps invoices otherwise flip wrongly).
+                let flipped = body_frac < 0.9 && vote_frac < 0.5 && flip_score < -FLIP_SCORE_MIN;
+                (if flipped { 1.0 } else { 0.0 }, 1.0)
+            } else if flip_score.abs() >= FLIP_SCORE_MIN {
+                (if flip_score < 0.0 { 1.0 } else { 0.0 }, 1.0)
+            } else {
+                let f = if flip_p >= 0.5 { 1.0 } else { 0.0 };
+                (f, flip_p.max(1.0 - flip_p))
+            }
+        } else {
+            let f = if flip_p >= 0.5 { 1.0 } else { 0.0 };
+            (f, flip_p.max(1.0 - flip_p))
+        }
+    } else {
+        let f = if flip_p >= 0.5 { 1.0 } else { 0.0 };
+        (f, flip_p.max(1.0 - flip_p))
+    };
+
     let rotation_deg = (180.0 - axis_deg).rem_euclid(180.0) + 180.0 * flip;
-    let confidence = trust_p * flip_p.max(1.0 - flip_p);
+    let confidence = trust_p * flip_conf;
     let needs_review = confidence < tau || preds[0] < 0.5;
     (rotation_deg, confidence, needs_review)
 }
@@ -507,6 +557,46 @@ mod tests {
             .map(Vec::len)
             .collect();
         assert_eq!(counts, expected);
+    }
+
+    #[test]
+    fn test_combine_rotation_v4_textline_gate() {
+        let mut features = vec![0.0f64; 116];
+        features[RADON_AXIS_INDEX] = 0.0; // horizontal fold
+        features[N_LINES_INDEX] = 16.0;
+        features[FLIP_SCORE_INDEX] = 0.38;
+        // GBDT says flipped (wrong) with high confidence; the gate overrides it.
+        let preds = [1.0, 1.0, 0.0, 0.0, 0.0, 0.99, 1.0];
+        let (deg, conf, review) = combine_rotation(&features, &preds, 0.9);
+        assert!((deg - 0.0).abs() < 1e-9, "deg={deg}");
+        assert!((conf - 1.0).abs() < 1e-12, "conf={conf}");
+        assert!(!review);
+
+        // Flipped text: negative flip_score -> 180.
+        features[FLIP_SCORE_INDEX] = -0.38;
+        let (deg, _, _) = combine_rotation(&features, &preds, 0.9);
+        assert!((deg - 180.0).abs() < 1e-9, "deg={deg}");
+
+        // Weak evidence on born-digital text defaults upright instead of
+        // trusting the GBDT flip head.
+        features[FLIP_SCORE_INDEX] = 0.01;
+        let (deg, _, _) = combine_rotation(&features, &preds, 0.9);
+        assert!((deg - 0.0).abs() < 1e-9, "deg={deg}");
+
+        // Born-digital with a negative ink-mass score but a line-vote majority
+        // for upright stays upright.
+        features[FLIP_SCORE_INDEX] = -0.2;
+        features[VOTE_FRAC_INDEX] = 0.6;
+        let (deg, _, _) = combine_rotation(&features, &preds, 0.9);
+        assert!((deg - 0.0).abs() < 1e-9, "deg={deg}");
+
+        // All-caps/digits born-digital stays upright even when both textline
+        // signals point the wrong way (no reliable ascender/descender mass).
+        features[FLIP_SCORE_INDEX] = -0.3;
+        features[VOTE_FRAC_INDEX] = 0.4;
+        features[BODY_FRAC_INDEX] = 0.93;
+        let (deg, _, _) = combine_rotation(&features, &preds, 0.9);
+        assert!((deg - 0.0).abs() < 1e-9, "deg={deg}");
     }
 
     #[test]
