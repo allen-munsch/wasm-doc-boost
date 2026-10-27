@@ -378,6 +378,14 @@ fn configure_session_builder(
                 }
             }
         }
+        #[cfg(not(all(
+            feature = "directml",
+            feature = "cuda",
+            feature = "openvino",
+            feature = "nnapi",
+            feature = "coreml",
+            feature = "cann"
+        )))]
         _ => {
             warn!("[ep] {} not compiled in, falling back to CPU", device);
             Ok(builder)

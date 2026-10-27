@@ -7,11 +7,11 @@
 //! and the redaction helpers a document pipeline needs.
 //!
 //! ```no_run
-//! use gliner2_rs::privacy::{Group, redact};
-//! use gliner2_rs::{SpanConfig, SpanEngine};
+//! use pii_span_core::privacy::{Group, redact};
+//! use pii_span_core::{SpanConfig, SpanEngine};
 //!
 //! # fn main() -> anyhow::Result<()> {
-//! gliner2_rs::init("my-app");
+//! pii_span_core::init("my-app");
 //! let mut engine = SpanEngine::new(SpanConfig::new("models/pii-onnx"))?;
 //!
 //! let text = "Contact Mario Rossi at mario.rossi@example.com.";

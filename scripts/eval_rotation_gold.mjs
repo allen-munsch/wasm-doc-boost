@@ -16,8 +16,8 @@ const { initSync, classify_file_v2, load_model_v2, model_version } = await impor
   resolve(ROOT, 'frontend/wasm_bridge.js')
 );
 initSync(new WebAssembly.Module(wasmBytes));
-load_model_v2(readFileSync(resolve(ROOT, 'data/model_v3.json'), 'utf-8'));
-if (model_version() !== 3) throw new Error(`expected model v3, got ${model_version()}`);
+load_model_v2(readFileSync(resolve(ROOT, 'data/model_v4.json'), 'utf-8'));
+if (model_version() !== 4) throw new Error(`expected model v4, got ${model_version()}`);
 
 function circularErr(a, b, period = 360) {
   const d = Math.abs(a - b);
@@ -47,6 +47,7 @@ for (let i = START; i < START + N; i++) {
   if (e > 90) flipErr++;
   const b = Math.round(deg);
   dist[b] = (dist[b] || 0) + 1;
+  if (n % 100 === 0) process.stderr.write(`progress ${n}/${N}\n`);
 }
 
 errs.sort((a, b) => a - b);

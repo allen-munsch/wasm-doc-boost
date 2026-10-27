@@ -1,6 +1,6 @@
 [package]
 name = "layout-core"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "PP-DocLayoutV3 document layout detection via ONNX Runtime (ported from xulihang/PP_DocLayout_ONNX)"
 license = "Apache-2.0"

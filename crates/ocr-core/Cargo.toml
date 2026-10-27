@@ -1,6 +1,6 @@
 [package]
 name = "ocr-core"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "ONNX-based OCR engine using PaddleOCR models (vendored from paddleocr_rs_onnx 0.2.7)"
 license = "MIT"

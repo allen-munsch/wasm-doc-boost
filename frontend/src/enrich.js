@@ -180,7 +180,7 @@ export function buildEnrichedDocument(params) {
         regions: params.regions || [],
         pii: params.pii || [],
         provenance: {
-            engine: 'wasm-doc-boost 0.1.0',
+            engine: 'wasm-doc-boost 0.3.0',
             tesseract: params.tesseract
                 ? {
                       version: params.tesseract.data.version,

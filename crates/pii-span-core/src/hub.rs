@@ -8,7 +8,7 @@
 //! the caller has to remember.
 //!
 //! ```no_run
-//! use gliner2_rs::{SpanConfig, SpanEngine, hub};
+//! use pii_span_core::{SpanConfig, SpanEngine, hub};
 //!
 //! // Uses ./models/pii if it holds an export, downloads it if it does not.
 //! let cfg = SpanConfig::new("models/pii").or_download(hub::PRIVACY_PII_MULTI);
