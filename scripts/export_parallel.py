@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Parallel v2 (per-degree) feature extraction.
+"""Parallel per-degree feature extraction.
 
-Splits labels.csv into N chunks, runs export_worker.py --v2 on each chunk
+Splits labels.csv into N chunks, runs export_worker.py on each chunk
 as a subprocess (PyO3 hangs with Pool), then merges the .npz files.
 """
 
@@ -61,7 +61,6 @@ def main():
                     args.labels,
                     "--output",
                     out_path,
-                    "--v2",
                 ],
                 stdin=open(flist_path),
                 stdout=subprocess.PIPE,

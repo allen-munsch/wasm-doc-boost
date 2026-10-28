@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Train the per-degree rotation rework model (v4).
 
-Input:  features npz from `export_parallel.py --v2` (116 features, 7 labels,
+Input:  features npz from `export_parallel.py` (124 features, 7 labels,
         plus rotation_deg metadata).
 Output: model.json (manifest `{labels, tau, version, trees, trees_per_label}`
         where `version` is the release tag string this model ships in —
@@ -488,7 +488,7 @@ def main():
         "--hybrid-ms",
         type=float,
         default=None,
-        help="hybrid_ms_per_image value to record (measured separately via profile_v2)",
+        help="hybrid_ms_per_image value to record (measured separately)",
     )
     args = parser.parse_args()
 

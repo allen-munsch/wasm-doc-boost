@@ -4,7 +4,7 @@
 Cardinal mode (default, pre-rework): 4 rotations (0/90/180/270), 9 labels,
 103 features (extract_all).
 
---v2 (per-degree rework): per base image K=16 angles = the 4 cardinal
+Per base image, K=16 angles = the 4 cardinal
 rotations + 6 seeded-random theta in (0,180), each exported at theta and
 theta+180 (flip-contrast pairs); 124 features (extract_all);
 7 labels [is_document, is_digital, is_paper, is_crumpled, is_shadow, flip,
@@ -49,7 +49,6 @@ LABEL_NAMES = [
     "trust",
 ]
 CSV_LABEL_NAMES = ["is_document", "is_digital", "is_paper", "is_crumpled", "is_shadow"]
-ROTATION_ANGLES = [0, 90, 180, 270]
 CARDINAL_ANGLES = [0, 90, 180, 270]
 K_FLIP_PAIRS = 6  # random theta in (0,180), each exported at theta and theta+180
 MAX_LONG_EDGE = 512
@@ -98,7 +97,7 @@ def augment_source(img, fname):
     return Image.fromarray(np.clip(a, 0.0, 255.0).astype(np.uint8), "RGB")
 
 
-def v2_angles(fname):
+def export_angles(fname):
     """K=16 angles per base image: 4 cardinals + 6 seeded-random theta in
     (0,180), each exported at theta and theta+180 so every non-cardinal
     sample has its exact flip counterpart at the same axis."""
@@ -112,45 +111,7 @@ def v2_angles(fname):
     return angles
 
 
-def process_one(fname, label_vec, images_dir):
-    img_path = os.path.join(images_dir, fname)
-    if not os.path.exists(img_path):
-        return None
-    try:
-        # Decode + resize EXACTLY as wasm-bridge (image crate, Triangle),
-        # so training features match the inference path pixel-for-pixel.
-        with open(img_path, "rb") as fh:
-            raw = fh.read()
-        pixels, rw, rh = py_features.load_rgb_resized(raw, MAX_LONG_EDGE)
-        rgb = np.frombuffer(pixels, dtype=np.uint8).reshape(rh, rw, 3)
-        img = Image.fromarray(rgb, "RGB")
-        fill = median_border_color(img)
-
-        feats_list, labels_list, fnames_list = [], [], []
-        for rot_idx, angle in enumerate(ROTATION_ANGLES):
-            if angle == 0:
-                rotated = img
-            else:
-                rotated = img.rotate(
-                    -angle, expand=True, resample=Image.BICUBIC, fillcolor=fill
-                )
-            rgb = rotated
-            rw, rh = rgb.size
-            pixels = np.array(rgb, dtype=np.uint8).tobytes()
-            feats = py_features.extract_all(pixels, rw, rh)
-            rotation_labels = [0, 0, 0, 0]
-            rotation_labels[rot_idx] = 1
-            full_labels = label_vec + rotation_labels
-            feats_list.append(feats)
-            labels_list.append(full_labels)
-            fnames_list.append(f"{fname}_rot{angle}")
-        return (feats_list, labels_list, fnames_list)
-    except (OSError, ValueError, RuntimeError) as e:
-        print(f"    skipping {fname}: {e}")
-        return None
-
-
-def process_one_v2(fname, label_vec, images_dir, gpu=False):
+def process_one(fname, label_vec, images_dir, gpu=False):
     img_path = os.path.join(images_dir, fname)
     if not os.path.exists(img_path):
         return None
@@ -166,7 +127,7 @@ def process_one_v2(fname, label_vec, images_dir, gpu=False):
         fill = median_border_color(img)
 
         feats_list, labels_list, fnames_list, angles_list = [], [], [], []
-        for angle in v2_angles(fname):
+        for angle in export_angles(fname):
             if angle == 0:
                 rotated_rgb = rgb
             elif gpu:
@@ -226,7 +187,6 @@ def main():
     parser.add_argument("--images", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--labels-csv", required=True)
-    parser.add_argument("--v2", action="store_true", help="per-degree rework export")
     parser.add_argument("--gpu", action="store_true", help="rotate on CUDA (radon stays CPU)")
     args = parser.parse_args()
 
@@ -243,25 +203,15 @@ def main():
         if fname not in labels:
             errors += 1
             continue
-        if args.v2:
-            result = process_one_v2(fname, labels[fname], args.images, gpu=args.gpu)
-            if result is None:
-                errors += 1
-            else:
-                feats, lbls, fnames, angles = result
-                feature_list.extend(feats)
-                label_list.extend(lbls)
-                filename_list.extend(fnames)
-                angle_list.extend(angles)
+        result = process_one(fname, labels[fname], args.images, gpu=args.gpu)
+        if result is None:
+            errors += 1
         else:
-            result = process_one(fname, labels[fname], args.images)
-            if result is None:
-                errors += 1
-            else:
-                feats, lbls, fnames = result
-                feature_list.extend(feats)
-                label_list.extend(lbls)
-                filename_list.extend(fnames)
+            feats, lbls, fnames, angles = result
+            feature_list.extend(feats)
+            label_list.extend(lbls)
+            filename_list.extend(fnames)
+            angle_list.extend(angles)
         if (i + 1) % 500 == 0:
             print(
                 f"  [{os.getpid()}] {i + 1}/{len(filenames)}",
@@ -279,22 +229,14 @@ def main():
     features = np.array(feature_list, dtype=np.float64)
     labels_arr = np.array(label_list, dtype=np.int8)
 
-    if args.v2:
-        np.savez_compressed(
-            args.output,
-            features=features,
-            labels=labels_arr,
-            filenames=np.array(filename_list),
-            rotation_deg=np.array(angle_list, dtype=np.float64),
-            label_names=np.array(LABEL_NAMES),
-        )
-    else:
-        np.savez_compressed(
-            args.output,
-            features=features,
-            labels=labels_arr,
-            filenames=np.array(filename_list),
-        )
+    np.savez_compressed(
+        args.output,
+        features=features,
+        labels=labels_arr,
+        filenames=np.array(filename_list),
+        rotation_deg=np.array(angle_list, dtype=np.float64),
+        label_names=np.array(LABEL_NAMES),
+    )
     print(
         f"Worker {os.getpid()}: wrote {args.output} ({features.shape[0]} samples, {errors} errors)",
         file=sys.stderr,
