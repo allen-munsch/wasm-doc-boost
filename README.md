@@ -30,18 +30,17 @@ python3 frontend/serve.py
 ```
 
 ```js
-import init, { load_model_v2, classify_file_v2, model_version } from './wasm_bridge.js';
+import init, { load_model, classify_file } from './wasm_bridge.js';
 
 await init();
 
 // Load the v8 manifest (XGBoost dump JSON: 7 heads + per-degree rotation)
 const resp = await fetch('model.json');
-load_model_v2(await resp.text());
-if (model_version() !== '0.5.0') throw new Error('expected model 0.5.0');
+load_model(await resp.text());
 
 // Classify an image from a Uint8Array (PNG or JPEG)
 const fileBytes = await fs.readFile('scan.png');  // or file input, drop event, etc.
-const result = classify_file_v2(fileBytes);
+const result = classify_file(fileBytes);
 // {
 //   is_document: 0.97, is_digital: 0.92, is_paper: 0.03,
 //   is_crumpled: 0.01, is_shadow: 0.12,
@@ -74,13 +73,13 @@ from PIL import Image
 
 img = Image.open("receipt.jpg").convert("RGB")
 pixels = np.array(img, dtype=np.uint8).tobytes()
-features = py_features.extract_all_v2(pixels, img.width, img.height)
+features = py_features.extract_all(pixels, img.width, img.height)
 # features is a list[float] of 124 values
 # (py_features.extract_all is the legacy 103-feature vector)
 
 # Same model + combine as the browser: load the v8 manifest and predict.
-py_features.load_model_v2(open("model.json").read())
-result = py_features.predict_v2(pixels, img.width, img.height)
+py_features.load_model(open("model.json").read())
+result = py_features.predict(pixels, img.width, img.height)
 # result = {is_document, is_digital, is_paper, is_crumpled, is_shadow,
 #           flip, trust, rotation_deg, rotation_confidence, needs_review,
 #           flip_vote_count, flip_vote_agreement, axis_vote_count,
@@ -112,16 +111,15 @@ Other Python surface: `classify_pdf`, `extract_text_with_positions`, `scan_pii`,
 
 ### API
 
-- `load_model_v2(json)` — parses the v8 manifest `{labels, tau, version, trees, trees_per_label, confidence_calibration}`; 7-label multi-output GBDT (5 document traits + flip + trust)
-- `classify_file_v2(bytes)` — decodes PNG/JPEG, resizes to max 512 px long edge, extracts 124 features, runs the 7 heads, then combines the deterministic radon axis with the per-glyph/vote flip gate into `rotation_deg` ∈ [0, 360), `rotation_confidence`, and `needs_review`
-- `model_version()` — the loaded manifest's `version` (a release-tag string such as `"0.5.0"`; empty for an unversioned manifest)
+- `load_model(json)` — parses the manifest `{labels, tau, trees, trees_per_label, confidence_calibration, label_thresholds}`; 7-label multi-output GBDT (5 document traits + flip + trust)
+- `classify_file(bytes)` — decodes PNG/JPEG, resizes to max 512 px long edge, extracts 124 features, runs the 7 heads, then combines the refined radon axis (S2) with the per-glyph/vote flip gate (S4) into `rotation_deg`, `rotation_confidence`, `quarter`, `skew_deg`, `axis_ok`, `flip_ok`, and `needs_review`
 - `classifyPdf(bytes)` — classifies a PDF memory buffer: `{pdf_type, page_count, pages_needing_ocr, confidence}` (native-text / scanned / mixed)
 - `extractTextWithPositions(bytes)` — extracts native text items with page, bounding box, and font/style metadata from a PDF memory buffer
 - `load_crf_model(json)` — loads the CRF model that backs `scan_pii`
 - `load_model(json)` / `classify_file(bytes)` — legacy 9-label API (`rotation_0/90/180/270`); kept for the old wheel, not used by the frontend
 - `scan_pii(text)` — rule-based + CRF PII scanner (credit cards, SSNs, emails, phones, addresses, names)
 
-The same functions exist in `py_features` (`load_model_v2`, `model_version`, `predict_v2`, `combine_rotation_v2`, `classify_pdf`, `extract_text_with_positions`, `scan_pii`), so a backend can score pixel-identical features and get the same predictions as the browser.
+The same functions exist in `py_features` (`load_model`, `predict`, `combine_rotation`, `classify_pdf`, `extract_text_with_positions`, `scan_pii`), so a backend can score pixel-identical features and get the same predictions as the browser.
 
 ## Frontend: DocBoost JS layer
 
@@ -149,7 +147,7 @@ const pdf = await db.analyzePdf(pdfFile);  // PDF: native text + OCR only the sc
 
 | Crate | Purpose |
 |---|---|
-| `features-core` | 124 pixel-heuristic features (`extract_all_v2`; legacy 103 = `extract_all`) |
+| `features-core` | 124 pixel-heuristic features (`extract_all`) |
 | `gbdt-core` | XGBoost manifest + per-degree rotation combine shared by wasm-bridge and py-features |
 | `wasm-bridge` | WASM bindings: classification, rotation, PDF, PII |
 | `py-features` | abi3 CPython wheel: features, GBDT, PDF, PII, and the Layout/Ocr/Pii ONNX engines |
@@ -254,9 +252,9 @@ An earlier attempt ran GLM-OCR entirely client-side using ONNX Runtime Web + Web
 
 If ONNX Runtime Web adds JSEP kernels for `GatherBlockQuantized` on WebGPU, or if a float16 WebGPU-compatible export with smaller memory footprint becomes available, this path could replace the GPU backend entirely — bringing Tier 2 OCR client-side. The repo has everything else wired up (serve.py serves `.onnx` files with proper MIME types and no-cache headers, the importmap is ready, and the test harnesses validate the full cascade).
 
-## Model Performance (manifest v8, 124 features, 1,080 trees)
+## Model Performance (124 features, 1,080 trees)
 
-Training: 440,592 samples (27,537 images × 16 rotations: the 4 cardinals + 6 seeded-random flip pairs) across 7 sources — FATURA2 digital receipts (36%), CORU photographed receipts (31%), COCO natural images (18%), hard negatives (7%), CORD-v2 desk receipts (4%), synthetic variants (3%), SRD scanned receipts (1%). Every non-cardinal sample has its exact 180° flip counterpart at the same axis, so the flip head sees matched upright/upside-down pairs. Split 80/10/10 train/cal/test grouped by FATURA2 template id (50 templates, recovered by `scripts/cluster_fatura_templates2.py`) where known, else by base image — whole templates stay together so shared fonts/layouts cannot leak across folds. XGBoost lr=0.1, depth 3–5 by head, 1,080 trees split unevenly across the seven heads (200/200/200/80/80/160/160). `data/model_v8.json` carries `version: "0.5.0"` — the release tag the model ships in, not a format counter; the WASM `model_version()` export returns it. The manifest also carries a 21-point isotonic `confidence_calibration` curve fitted on the cal split.
+Training: 440,592 samples (27,537 images × 16 rotations: the 4 cardinals + 6 seeded-random flip pairs) across 7 sources — FATURA2 digital receipts (36%), CORU photographed receipts (31%), COCO natural images (18%), hard negatives (7%), CORD-v2 desk receipts (4%), synthetic variants (3%), SRD scanned receipts (1%). Every non-cardinal sample has its exact 180° flip counterpart at the same axis, so the flip head sees matched upright/upside-down pairs. Split 80/10/10 train/cal/test grouped by FATURA2 template id (50 templates, recovered by `scripts/cluster_fatura_templates2.py`) where known, else by base image — whole templates stay together so shared fonts/layouts cannot leak across folds. XGBoost lr=0.1, depth 3–5 by head, 1,080 trees split unevenly across the seven heads (200/200/200/80/80/160/160). `data/model.json` is the shipped manifest (labels, tau, trees, trees_per_label, confidence_calibration, label_thresholds). The manifest also carries a 21-point isotonic `confidence_calibration` curve fitted on the cal split.
 
 **Headline results, measured on the shipped WASM build:**
 
@@ -345,7 +343,7 @@ Photographed and scanned documents still route through the GBDT flip head off-ca
 ### What changed in v0.5.0
 
 - **Full-resolution noise+shadow features in the hybrid path.** k=4 averaging collapsed JPEG blockiness to 0 and smeared the morphological illumination field, dropping held-out shadow F1 from 0.53 to 0.31 and crumpled F1 from 0.56 to 0.40. The hybrid extractor now recomputes the 9 noise+shadow features (indices 55..63) from the full-res grayscale and splices them into the k=4 core vector — honest cost ~27.9 ms/image on a 512-long-edge fixture (was ~9.3 ms).
-- **Per-label trait thresholds.** The rare crumpled/shadow heads train with heavy `scale_pos_weight`, so a blanket 0.5 threshold over-predicts them. The manifest now ships `label_thresholds` selected on the calibration split for F1 (crumpled 0.71, shadow 0.81), and `classify_file_v2` returns `trait_labels` (boolean decisions) plus `trait_uncertain` (the ±0.08 near-boundary band) so near-threshold pages present as uncertain, not confident rejections.
+- **Per-label trait thresholds.** The rare crumpled/shadow heads train with heavy `scale_pos_weight`, so a blanket 0.5 threshold over-predicts them. The manifest now ships `label_thresholds` selected on the calibration split for F1 (crumpled 0.71, shadow 0.81), and `classify_file` returns `trait_labels` (boolean decisions) plus `trait_uncertain` (the ±0.08 near-boundary band) so near-threshold pages present as uncertain, not confident rejections.
 - **Held-out doc traits restored to v0.4.0-or-better.** With the full-res noise/shadow fix and per-label thresholds: is_document 0.997, is_digital 1.000, is_paper 0.994, is_crumpled 0.765, is_shadow 0.541 (v0.4.0: 0.998 / 1.000 / 0.983 / 0.556 / 0.532).
 - **Training data: +CORU photographed receipts.** 8,437 CORU images (134,992 samples) added, taking training from 305,600 to 440,592 samples — clean paper-receipt coverage that sharpens `is_paper` and reduces crumpled/shadow false positives.
 - **Version bump.** Workspace crates, the frontend package, and the Python wheel are now 0.5.0.
@@ -395,7 +393,7 @@ Combined with Sobel-pass sharing (one `SobelResult` instead of seven independent
 
 ## Feature Taxonomy
 
-Every feature is computed from raw pixel data — no deep learning, no learned embeddings, no external dependencies beyond `libm` for `no_std` math. This is deliberate: the same Rust code runs identically in the browser (WASM), in Python via PyO3, and in standalone binaries. The canonical vector is `extract_all_v2`: 124 features = 100 core heuristics + 24 rotation signals.
+Every feature is computed from raw pixel data — no deep learning, no learned embeddings, no external dependencies beyond `libm` for `no_std` math. This is deliberate: the same Rust code runs identically in the browser (WASM), in Python via PyO3, and in standalone binaries. The canonical vector is `extract_all`: 124 features = 100 core heuristics + 24 rotation signals.
 
 ### Color (5 features)
 
