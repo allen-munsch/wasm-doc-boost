@@ -1,18 +1,18 @@
 # wasm-doc-boost
 
-Client-side document classification via Rust → WASM + GBDT inference. Seven GBDT labels — `is_document`, `is_digital`, `is_paper`, `is_crumpled`, `is_shadow`, `flip`, `trust` — plus a deterministic per-degree `rotation_deg` (radon axis + fold-snap + glyph/vote flip gate). 124 handcrafted pixel-heuristic features, 1,080 XGBoost trees, 4.5 MB WASM (2.0 MB gzip), 2.7 MB model JSON (317 KB gzip). In-browser privacy, sub-millisecond model scoring.
+Client-side document intelligence via Rust → WASM: GBDT classification, per-degree rotation, PDF inspection, and PII scanning in the browser, plus ONNX layout/OCR/NER engines in Python. Seven GBDT labels — `is_document`, `is_digital`, `is_paper`, `is_crumpled`, `is_shadow`, `flip`, `trust` — plus a deterministic per-degree `rotation_deg` (radon axis + fold-snap + glyph/vote flip gate). 124 handcrafted pixel-heuristic features, 1,080 XGBoost trees, 4.5 MB WASM (2.0 MB gzip), 2.7 MB model JSON (317 KB gzip). In-browser privacy, sub-millisecond model scoring.
 
 ![WASM size](https://img.shields.io/badge/wasm-4.5%20MB%20%7C%202.0%20MB%20gzip-blue)
 ![Features](https://img.shields.io/badge/features-124-blue)
 ![Trees](https://img.shields.io/badge/trees-1%2C080-blue)
-![Version](https://img.shields.io/badge/version-0.4.0-green)
+![Version](https://img.shields.io/badge/version-0.5.0-green)
 ![Rotation](https://img.shields.io/badge/rotation-1200%2F1200%20cardinal-brightgreen)
 
 ## Why This Exists
 
 Document classification usually requires sending images to a server. That means latency, bandwidth, and a privacy trade-off: someone else's hardware sees every document you classify.
 
-wasm-doc-boost runs entirely in the browser. A 4.5 MB WASM binary extracts 124 structural features from pixel data and scores them through a gradient-boosted decision tree ensemble — no GPU, no network, no inference server. The model JSON is 2.7 MB (317 KB gzip), so the whole classifier loads from a CDN in a couple of seconds on a typical connection, and the GBDT scoring itself takes well under a millisecond per image (end-to-end extraction + scoring is single-digit milliseconds at 512 px — see Performance).
+wasm-doc-boost runs entirely in the browser. A 4.5 MB WASM binary extracts 124 structural features from pixel data and scores them through a gradient-boosted decision tree ensemble — no GPU, no network, no inference server. The model JSON is 2.7 MB (317 KB gzip), so the whole classifier loads from a CDN in a couple of seconds on a typical connection, and the GBDT scoring itself takes well under a millisecond per image (end-to-end extraction + scoring is single-digit milliseconds at 512 px — see Performance). PDF inspection (`classifyPdf`, `extractTextWithPositions`) and PII scanning (`scan_pii`) ride the same WASM binary, so documents never leave the tab.
 
 If you are building a client-side document scanner, an offline-capable PWA, a privacy-first OCR pipeline, or a browser extension that needs to know whether the current page contains a receipt versus a photo of a cat, this is the library you want.
 
@@ -34,10 +34,10 @@ import init, { load_model_v2, classify_file_v2, model_version } from './wasm_bri
 
 await init();
 
-// Load the v3 manifest (XGBoost dump JSON: 7 heads + per-degree rotation)
+// Load the v6 manifest (XGBoost dump JSON: 7 heads + per-degree rotation)
 const resp = await fetch('model.json');
 load_model_v2(await resp.text());
-if (model_version() !== '0.4.0') throw new Error('expected model 0.4.0');
+if (model_version() !== '0.5.0') throw new Error('expected model 0.5.0');
 
 // Classify an image from a Uint8Array (PNG or JPEG)
 const fileBytes = await fs.readFile('scan.png');  // or file input, drop event, etc.
@@ -78,7 +78,7 @@ features = py_features.extract_all_v2(pixels, img.width, img.height)
 # features is a list[float] of 124 values
 # (py_features.extract_all is the legacy 103-feature vector)
 
-# Same model + combine as the browser: load the v3 manifest and predict.
+# Same model + combine as the browser: load the v6 manifest and predict.
 py_features.load_model_v2(open("model.json").read())
 result = py_features.predict_v2(pixels, img.width, img.height)
 # result = {is_document, is_digital, is_paper, is_crumpled, is_shadow,
@@ -87,34 +87,98 @@ result = py_features.predict_v2(pixels, img.width, img.height)
 #           axis_agreement, glyph_count, glyph_logodds}
 ```
 
+### Python inference engines
+
+The wheel also ships three ONNX inference engines as classes (load once, infer many):
+
+```python
+# PP-DocLayoutV3 layout detection
+layout = py_features.LayoutEngine("PP-DocLayoutV3.onnx")
+regions = layout.detect(pixels, img.width, img.height)
+# -> [{'label': 'text', 'score': 0.95, 'x1': ..., 'y1': ..., 'x2': ..., 'y2': ...}, ...]
+
+# PaddleOCR (detection + recognition) — models passed as bytes
+ocr = py_features.OcrEngine(det_onnx_bytes, rec_onnx_bytes, keys_bytes)
+lines = ocr.recognize(pixels, img.width, img.height)
+# -> [{'text': 'Hello', 'confidence': 0.98, 'x': ..., 'y': ..., 'width': ..., 'height': ...}, ...]
+
+# GLiNER2 span-based PII / entity extraction
+pii = py_features.PiiEngine("gliner2-pii-onnx/")
+spans = pii.extract("Card 4111 1111 1111 1111", ["payment_card", "driver_license"])
+# -> [{'label': 'payment_card', 'text': '4111 1111 1111 1111', 'start': 5, 'end': 24, 'score': 0.98}, ...]
+```
+
+Other Python surface: `classify_pdf`, `extract_text_with_positions`, `scan_pii`, `rotation_diagnostic`, `extract_glyph_crops`, `extract_glyph_logodds`, `load_rgb_resized`, `is_release_build`.
+
 ### API
 
-- `load_model_v2(json)` — parses the v3 manifest `{labels, tau, version, trees, trees_per_label, confidence_calibration}`; 7-label multi-output GBDT (5 document traits + flip + trust)
+- `load_model_v2(json)` — parses the v6 manifest `{labels, tau, version, trees, trees_per_label, confidence_calibration}`; 7-label multi-output GBDT (5 document traits + flip + trust)
 - `classify_file_v2(bytes)` — decodes PNG/JPEG, resizes to max 512 px long edge, extracts 124 features, runs the 7 heads, then combines the deterministic radon axis with the per-glyph/vote flip gate into `rotation_deg` ∈ [0, 360), `rotation_confidence`, and `needs_review`
 - `model_version()` — the loaded manifest's `version` (a release-tag string such as `"0.4.0"`; empty for an unversioned manifest)
+- `classifyPdf(bytes)` — classifies a PDF memory buffer: `{pdf_type, page_count, pages_needing_ocr, confidence}` (native-text / scanned / mixed)
+- `extractTextWithPositions(bytes)` — extracts native text items with page, bounding box, and font/style metadata from a PDF memory buffer
+- `load_crf_model(json)` — loads the CRF model that backs `scan_pii`
 - `load_model(json)` / `classify_file(bytes)` — legacy 9-label API (`rotation_0/90/180/270`); kept for the old wheel, not used by the frontend
 - `scan_pii(text)` — rule-based + CRF PII scanner (credit cards, SSNs, emails, phones, addresses, names)
 
-The same functions exist in `py_features` (`load_model_v2`, `model_version`, `predict_v2`, `combine_rotation_v2`), so a backend can score pixel-identical features and get the same predictions as the browser.
+The same functions exist in `py_features` (`load_model_v2`, `model_version`, `predict_v2`, `combine_rotation_v2`, `classify_pdf`, `extract_text_with_positions`, `scan_pii`), so a backend can score pixel-identical features and get the same predictions as the browser.
+
+## Frontend: DocBoost JS layer
+
+`frontend/src/` provides a zero-build vanilla-JS layer (`createDocBoost`) over the WASM engine, Tesseract.js, and the GLM-OCR backend. See `frontend/src/README.md` for the full API.
+
+```js
+import { createDocBoost } from './src/docboost.js';
+
+const db = await createDocBoost({
+  modelPath: 'model.json',
+  tessWorkerPath: 'vendor/tesseract/worker.min.js',
+  tessCorePath: 'vendor/tesseract',
+  glmBackend: 'http://localhost:8765',  // omit to skip GLM-OCR
+});
+
+const doc = await db.analyze(imageFile);   // image: classify → rotate → OCR → merge → PII
+const pdf = await db.analyzePdf(pdfFile);  // PDF: native text + OCR only the scanned pages
+```
+
+`analyze()` classifies with the GBDT, rotates to upright when the estimator is confident, runs Tesseract and GLM-OCR in parallel, merges their regions by IoU, and scans the combined text for PII. `analyzePdf()` classifies the PDF, extracts native text items with positions, and OCRs only the pages the classifier marks as scanned. Both return an EnrichedDocument — `frontend/src/enrich.js` provides the lenses (`regions`, `classification`, `provenance`, `fields`, `region`), curried mutations (`redactRegion`, `addFieldAnnotation`), and `toJSON`/`fromJSON` serialization.
+
+## Workspace
+
+`crates/*` — one Cargo workspace, nine crates:
+
+| Crate | Purpose |
+|---|---|
+| `features-core` | 124 pixel-heuristic features (`extract_all_v2`; legacy 103 = `extract_all`) |
+| `gbdt-core` | XGBoost manifest + per-degree rotation combine shared by wasm-bridge and py-features |
+| `wasm-bridge` | WASM bindings: classification, rotation, PDF, PII |
+| `py-features` | abi3 CPython wheel: features, GBDT, PDF, PII, and the Layout/Ocr/Pii ONNX engines |
+| `pdf-inspector-core` | Vendored PDF inspection (type classification + text-with-positions extraction) |
+| `layout-core` | PP-DocLayoutV3 layout detection via ONNX Runtime |
+| `ocr-core` | PaddleOCR ONNX detection + recognition |
+| `pii-core` | Rule-based + CRF PII scanner |
+| `pii-span-core` | GLiNER2 span-based PII/NER inference |
 
 ## Cost-Controlled OCR Ladder
 
 Using a single OCR pipeline for every image is wasteful. An LLM-grade OCR model running on a GPU might cost 100-1000× more per page than a browser-local heuristic, and most images don't need it. wasm-doc-boost implements a three-tier ladder:
 
 ```
-Image → [Tier 0: WASM GBDT] → decision
-         ├─ is_document ≤ 0.3?  → discard (cat photo, meme, screenshot)
-         ├─ is_digital ≥ 0.9?   → [Tier 1: Tesseract.js] → PII scan → done
-         └─ is_paper ≥ 0.5?     → [Tier 2: GLM-OCR GPU]  → PII scan → done
-                                 ↘ is_crumpled ≥ 0.5 OR is_shadow ≥ 0.5?
-                                    → [Tier 2: GLM-OCR] (Tesseract struggles on these)
+Image → [Tier 0: WASM GBDT] → 7 labels + rotation_deg
+         │
+         ├─ shipped default: rotate upright → Tesseract.js ∥ GLM-OCR → merge → PII scan
+         │
+         └─ optional cost gate (from the GBDT output):
+              is_document ≤ 0.3?        → discard (cat photo, meme, screenshot)
+              is_digital  ≥ 0.9?        → Tesseract.js only
+              is_paper/crumpled/shadow? → GLM-OCR (Tesseract struggles)
 ```
 
 **Tier 0 — WASM GBDT classifier** (sub-millisecond scoring, 4.5 MB WASM + 2.7 MB model download, costs nothing after load). Runs in the browser's main thread. Determines *what kind of image this is* before any OCR engine spins up. The 7 labels plus `rotation_deg` answer every routing question: Is this a document at all? Digital or paper? Rotated? Crumpled/shadowed (i.e., will Tesseract fail)? `rotation_deg` also tells the OCR tier which way to orient the image.
 
-**Tier 1 — Tesseract.js** (~500 ms–2 s in-browser, free, no network). Offline-capable, privacy-preserving, good enough for clean digital receipts and screenshots. The frontend automatically uses Tesseract for digital documents and falls through to Tier 2 for paper, crumpled, or shadowed images.
+**Tier 1 — Tesseract.js** (~500 ms–2 s in-browser, free, no network). Offline-capable, privacy-preserving, good enough for clean digital receipts and screenshots. The shipped `DocBoost.analyze()` runs Tesseract on every image (in parallel with GLM-OCR when available); the GBDT output is what lets a cost-sensitive caller restrict Tier 2 to the hard cases.
 
-**Tier 2 — GLM-OCR via GPU backend** (~1–3 s per page, requires container with NVIDIA GPU). High-quality multimodal OCR for photographed paper documents. Only invoked when the GBDT classifier says it's needed — paper receipts shot on a kitchen counter, crumpled invoices, shadowed documents. The backend is included in this repo (FastAPI + zai-org/GLM-OCR) and runs via `podman-compose`.
+**Tier 2 — GLM-OCR via GPU backend** (~1–3 s per page, requires container with NVIDIA GPU). High-quality multimodal OCR for photographed paper documents. In the shipped demo it runs in parallel with Tesseract and the results are merged by IoU; the GBDT classification lets a caller skip it for clean digital docs. The backend is included in this repo (FastAPI + zai-org/GLM-OCR) and runs via `podman-compose` (see `compose.yaml`).
 
 The ladder is embedded in the frontend's `DocBoost.analyze()` function: GBDT runs first, rotation is corrected, Tesseract and GLM-OCR fire in parallel (GLM-OCR is skippable if unavailable), then results are merged and scanned for PII.
 
@@ -245,6 +309,13 @@ The 0 flip errors on born-digital invoices come from the deterministic flip gate
 
 Photographed and scanned documents still route through the GBDT flip head off-cardinal and must be treated as needing review — PLAN.md Path B (quantized vision encoder) is the escalation for those.
 
+### What changed in v0.5.0
+
+- **Full-resolution noise+shadow features in the hybrid path.** k=4 averaging collapsed JPEG blockiness to 0 and smeared the morphological illumination field, dropping held-out shadow F1 from 0.53 to 0.31 and crumpled F1 from 0.56 to 0.40. The hybrid extractor now recomputes the 9 noise+shadow features (indices 55..63) from the full-res grayscale and splices them into the k=4 core vector — honest cost ~27.9 ms/image on a 512-long-edge fixture (was ~9.3 ms).
+- **Per-label trait thresholds.** The rare crumpled/shadow heads train with heavy `scale_pos_weight`, so a blanket 0.5 threshold over-predicts them. The manifest now ships `label_thresholds` selected on the calibration split for F1 (crumpled 0.71, shadow 0.81), and `classify_file_v2` returns `trait_labels` (boolean decisions) plus `trait_uncertain` (the ±0.08 near-boundary band) so near-threshold pages present as uncertain, not confident rejections.
+- **Held-out doc traits restored to v0.4.0-or-better.** With the full-res noise/shadow fix and per-label thresholds: is_document 0.997, is_digital 1.000, is_paper 0.994, is_crumpled 0.765, is_shadow 0.541 (v0.4.0: 0.998 / 1.000 / 0.983 / 0.556 / 0.532).
+- **Version bump.** Workspace crates, the frontend package, and the Python wheel are now 0.5.0.
+
 ### What changed in v0.4.0
 
 - **Retrained on a template-grouped split.** FATURA2's 50 shared templates previously leaked across train/cal/test when splitting by base image and inflated held-out numbers. `data/fatura2_template_ids.json` keeps whole templates together, so the split is honest.
@@ -345,8 +416,15 @@ RUSTFLAGS="-C target-feature=+simd128" wasm-pack build --target web crates/wasm-
 ## Test
 
 ```bash
-cargo test -p features-core                         # Rust unit tests (58)
-cargo test -p wasm-bridge                           # WASM integration tests (10)
+cargo test --workspace                              # all native tests
+cargo test -p features-core                         # 61 unit tests
+cargo test -p gbdt-core                             # 12 unit tests
+cargo test -p ocr-core                              # 9 unit tests
+cargo test -p pdf-inspector-core                    # 298 tests (vendored PDF core)
+cargo test -p pii-core                              # 45 tests
+cargo test -p pii-span-core                         # 27 tests
+cargo test -p wasm-bridge                           # 3 native tests
+wasm-pack test --node crates/wasm-bridge            # 6 wasm_bindgen tests
 ```
 
 ## License

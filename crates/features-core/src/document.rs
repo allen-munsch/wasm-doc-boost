@@ -133,7 +133,18 @@ pub fn connected_components(
 /// - saturation_edge_ratio: ratio of saturation in low-edge vs high-edge regions
 pub fn document_features(pixels: &[u8], width: usize, height: usize) -> Vec<f64> {
     let gray = to_grayscale(pixels, width, height);
-    let threshold = otsu_threshold(&gray);
+    document_features_gray(&gray, pixels, width, height)
+}
+
+/// Document features given a pre-computed grayscale image. The caller already
+/// has `gray` from `to_grayscale`; recomputing it here is pure waste.
+pub fn document_features_gray(
+    gray: &[f64],
+    pixels: &[u8],
+    width: usize,
+    height: usize,
+) -> Vec<f64> {
+    let threshold = otsu_threshold(gray);
 
     // Binarize: foreground = dark pixels (text typically dark on light)
     let binary: Vec<bool> = gray.iter().map(|&v| v <= threshold).collect();
@@ -187,7 +198,7 @@ pub fn document_features(pixels: &[u8], width: usize, height: usize) -> Vec<f64>
     let hough_lines = simplified_hough(&binary, width, height);
 
     // Saturation in low-edge vs. high-edge regions
-    let sat_ratio = saturation_edge_ratio(pixels, width, height);
+    let sat_ratio = saturation_edge_ratio(pixels, gray, width, height);
 
     alloc::vec![
         comp_count,
@@ -282,13 +293,24 @@ fn median(values: &[f64]) -> f64 {
 /// Simplified Hough transform on a 64×64 accumulator.
 /// Returns dominant line count (peaks above threshold).
 fn simplified_hough(binary: &[bool], width: usize, height: usize) -> f64 {
-    let acc_w = 64usize;
-    let acc_h = 64usize;
-    let mut accumulator = vec![0u32; acc_w * acc_h];
+    const ACC_W: usize = 64;
+    const ACC_H: usize = 64;
+    let mut accumulator = vec![0u32; ACC_W * ACC_H];
     let diag = sqrt((width * width + height * height) as f64);
     let rho_max = diag;
-    let d_rho = 2.0 * rho_max / acc_h as f64;
-    let d_theta = core::f64::consts::PI / acc_w as f64;
+    let d_rho = 2.0 * rho_max / ACC_H as f64;
+    let d_theta = core::f64::consts::PI / ACC_W as f64;
+
+    // Theta depends only on t_idx, not on x/y: precompute the trig once
+    // instead of calling libm cos/sin per foreground pixel (was the dominant
+    // cost of this transform). Bit-identical to the per-pixel calls.
+    let mut cos_theta = [0.0f64; ACC_W];
+    let mut sin_theta = [0.0f64; ACC_W];
+    for (t_idx, slot) in cos_theta.iter_mut().enumerate() {
+        let theta = t_idx as f64 * d_theta;
+        *slot = libm::cos(theta);
+        sin_theta[t_idx] = libm::sin(theta);
+    }
 
     for y in 0..height {
         for x in 0..width {
@@ -296,12 +318,13 @@ fn simplified_hough(binary: &[bool], width: usize, height: usize) -> f64 {
             if !binary[idx] {
                 continue;
             }
-            for t_idx in 0..acc_w {
-                let theta = t_idx as f64 * d_theta;
-                let rho = x as f64 * libm::cos(theta) + y as f64 * libm::sin(theta);
+            let xf = x as f64;
+            let yf = y as f64;
+            for t_idx in 0..ACC_W {
+                let rho = xf * cos_theta[t_idx] + yf * sin_theta[t_idx];
                 let r_idx = ((rho + rho_max) / d_rho) as usize;
-                if r_idx < acc_h {
-                    accumulator[r_idx * acc_w + t_idx] += 1;
+                if r_idx < ACC_H {
+                    accumulator[r_idx * ACC_W + t_idx] += 1;
                 }
             }
         }
@@ -316,20 +339,20 @@ fn simplified_hough(binary: &[bool], width: usize, height: usize) -> f64 {
     let mut peak_count = 0u32;
 
     // Non-max suppression: count local maxima above threshold
-    for r in 1..acc_h - 1 {
-        for c in 1..acc_w - 1 {
-            let v = accumulator[r * acc_w + c];
+    for r in 1..ACC_H - 1 {
+        for c in 1..ACC_W - 1 {
+            let v = accumulator[r * ACC_W + c];
             if v < threshold {
                 continue;
             }
-            let is_peak = v >= accumulator[(r - 1) * acc_w + c]
-                && v >= accumulator[(r + 1) * acc_w + c]
-                && v >= accumulator[r * acc_w + (c - 1)]
-                && v >= accumulator[r * acc_w + (c + 1)]
-                && v >= accumulator[(r - 1) * acc_w + (c - 1)]
-                && v >= accumulator[(r - 1) * acc_w + (c + 1)]
-                && v >= accumulator[(r + 1) * acc_w + (c - 1)]
-                && v >= accumulator[(r + 1) * acc_w + (c + 1)];
+            let is_peak = v >= accumulator[(r - 1) * ACC_W + c]
+                && v >= accumulator[(r + 1) * ACC_W + c]
+                && v >= accumulator[r * ACC_W + (c - 1)]
+                && v >= accumulator[r * ACC_W + (c + 1)]
+                && v >= accumulator[(r - 1) * ACC_W + (c - 1)]
+                && v >= accumulator[(r - 1) * ACC_W + (c + 1)]
+                && v >= accumulator[(r + 1) * ACC_W + (c - 1)]
+                && v >= accumulator[(r + 1) * ACC_W + (c + 1)];
             if is_peak {
                 peak_count += 1;
             }
@@ -340,8 +363,12 @@ fn simplified_hough(binary: &[bool], width: usize, height: usize) -> f64 {
 }
 
 /// Ratio of mean saturation in low-edge vs. high-edge regions.
-fn saturation_edge_ratio(pixels: &[u8], width: usize, height: usize) -> f64 {
-    let gray = to_grayscale(pixels, width, height);
+fn saturation_edge_ratio(
+    pixels: &[u8],
+    gray: &[f64],
+    width: usize,
+    height: usize,
+) -> f64 {
     let n = width * height;
 
     // Compute edge magnitude per pixel (simple gradient)

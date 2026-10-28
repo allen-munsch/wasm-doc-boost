@@ -56,6 +56,7 @@ def main():
     parser.add_argument("--output", required=True)
     parser.add_argument("--workers", type=int, default=0)
     parser.add_argument("--v2", action="store_true", help="per-degree rework export")
+    parser.add_argument("--gpu", action="store_true", help="rotate on CUDA (radon stays CPU)")
     args = parser.parse_args()
 
     # Load filenames from CSV
@@ -92,6 +93,8 @@ def main():
         ]
         if args.v2:
             cmd.append("--v2")
+        if args.gpu:
+            cmd.append("--gpu")
         proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, text=True)
         proc.stdin.write("\n".join(chunk) + "\n")
         proc.stdin.close()

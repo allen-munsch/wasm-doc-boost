@@ -87,18 +87,21 @@ fn rotate_gray_square(gray: &[f64], width: usize, height: usize, deg: f64) -> (V
     let mut out = alloc::vec![255.0f64; size * size];
     for y in 0..size {
         let yc = y as f64 - c;
+        // xs/ys are linear in x (slope cos_t/sin_t): increment per column
+        // rather than rebuilding the affine map per pixel. xsc/ysc are
+        // clamped to [0, last] before the cast, so `as usize` truncates
+        // toward zero == floor — no libm::floor per pixel.
+        let mut xs = c - c * cos_t - yc * sin_t;
+        let mut ys = c - c * sin_t + yc * cos_t;
         for x in 0..size {
-            let xc = x as f64 - c;
-            let xs = (xc * cos_t - yc * sin_t + c).clamp(0.0, last);
-            let ys = (xc * sin_t + yc * cos_t + c).clamp(0.0, last);
-            let x0f = libm::floor(xs);
-            let y0f = libm::floor(ys);
-            let fx = xs - x0f;
-            let fy = ys - y0f;
-            let x0 = x0f as usize;
-            let y0 = y0f as usize;
-            let x1 = ((x0f + 1.0) as usize).min(size - 1);
-            let y1 = ((y0f + 1.0) as usize).min(size - 1);
+            let xsc = xs.clamp(0.0, last);
+            let ysc = ys.clamp(0.0, last);
+            let x0 = xsc as usize;
+            let y0 = ysc as usize;
+            let fx = xsc - x0 as f64;
+            let fy = ysc - y0 as f64;
+            let x1 = (x0 + 1).min(size - 1);
+            let y1 = (y0 + 1).min(size - 1);
             let v00 = padded[y0 * size + x0];
             let v10 = padded[y0 * size + x1];
             let v01 = padded[y1 * size + x0];
@@ -107,6 +110,8 @@ fn rotate_gray_square(gray: &[f64], width: usize, height: usize, deg: f64) -> (V
                 + fx * (1.0 - fy) * v10
                 + (1.0 - fx) * fy * v01
                 + fx * fy * v11;
+            xs += cos_t;
+            ys += sin_t;
         }
     }
     (out, size)
@@ -268,6 +273,175 @@ pub fn textline_flip_best_axis(
     let best = best_lines.expect("axes non-empty");
     let features = flip_features_from_lines(&best);
     let glyph_crops = crate::glyph::glyph_crops_from_mask(&best.mask, best.size, &best.bands);
+    let glyph_count = glyph_crops.len() / crate::glyph::GLYPH_DIM;
+    BestAxisFlip {
+        axis: best_axis,
+        features,
+        glyph_crops,
+        glyph_count,
+    }
+}
+
+/// Nearest-neighbour rotate of grayscale to a max(w,h) square, paper = 255.
+/// Cheaper than bilinear; used only for axis-candidate SCORING, where we need
+/// line-band structure, not 1-2px stroke fidelity.
+fn rotate_gray_square_nn(
+    gray: &[f64],
+    width: usize,
+    height: usize,
+    deg: f64,
+) -> (Vec<f64>, usize) {
+    let size = width.max(height);
+    if size == 0 {
+        return (Vec::new(), 0);
+    }
+    let ox = (size - width) / 2;
+    let oy = (size - height) / 2;
+    let mut padded = alloc::vec![255.0f64; size * size];
+    for y in 0..height {
+        for x in 0..width {
+            padded[(y + oy) * size + (x + ox)] = gray[y * width + x];
+        }
+    }
+    let rad = deg.to_radians();
+    let sin_t = libm::sin(rad);
+    let cos_t = libm::cos(rad);
+    let c = (size as f64 - 1.0) / 2.0;
+    let last = (size - 1) as f64;
+    let mut out = alloc::vec![255.0f64; size * size];
+    for y in 0..size {
+        let yc = y as f64 - c;
+        let mut xs = c - c * cos_t - yc * sin_t;
+        let mut ys = c - c * sin_t + yc * cos_t;
+        for x in 0..size {
+            let xi = (xs + 0.5).clamp(0.0, last) as usize;
+            let yi = (ys + 0.5).clamp(0.0, last) as usize;
+            out[y * size + x] = padded[yi * size + xi];
+            xs += cos_t;
+            ys += sin_t;
+        }
+    }
+    (out, size)
+}
+
+/// Otsu threshold on a grayscale slice (256-bin histogram).
+fn otsu256(gray: &[f64]) -> f64 {
+    let mut hist = [0u32; 256];
+    for &v in gray {
+        let idx = (v.clamp(0.0, 255.0)) as usize;
+        hist[idx.min(255)] += 1;
+    }
+    let total = gray.len() as f64;
+    let mut sum_all = 0.0f64;
+    for (i, &h) in hist.iter().enumerate() {
+        sum_all += i as f64 * h as f64;
+    }
+    let mut best_t = 128.0f64;
+    let mut best_var = -1.0f64;
+    let mut w_b = 0.0f64;
+    let mut sum_b = 0.0f64;
+    for (i, &h) in hist.iter().enumerate() {
+        w_b += h as f64;
+        if w_b < 1.0 {
+            continue;
+        }
+        let w_f = total - w_b;
+        if w_f < 1.0 {
+            break;
+        }
+        sum_b += i as f64 * h as f64;
+        let m_b = sum_b / w_b;
+        let m_f = (sum_all - sum_b) / w_f;
+        let between = w_b * w_f * (m_b - m_f) * (m_b - m_f);
+        if between > best_var {
+            best_var = between;
+            best_t = i as f64;
+        }
+    }
+    best_t
+}
+
+/// Cheap candidate-axis line quality: NN-rotate + Otsu threshold + row-run
+/// band count. Only the ORDERING among radon's top-4 axes matters, so the
+/// cheaper binarization and nearest-neighbour sampling are fine.
+fn cheap_line_quality(
+    gray: &[f64],
+    width: usize,
+    height: usize,
+    axis_rad: f64,
+) -> (f64, f64) {
+    let axis_deg = axis_rad.to_degrees() % 180.0;
+    let deskew_deg = if axis_deg < 1.5 || axis_deg > 178.5 {
+        0.0
+    } else {
+        axis_deg - 180.0
+    };
+    let (rot, size) = rotate_gray_square_nn(gray, width, height, deskew_deg);
+    let thr = otsu256(&rot);
+    let mut n = 0.0f64;
+    let mut ink = 0.0f64;
+    let mut y = 0usize;
+    while y < size {
+        let mut row_ink = 0usize;
+        for x in 0..size {
+            if rot[y * size + x] <= thr {
+                row_ink += 1;
+            }
+        }
+        if row_ink == 0 {
+            y += 1;
+            continue;
+        }
+        let y0 = y;
+        let mut y1 = y + 1;
+        let mut band_ink = row_ink;
+        while y1 < size {
+            let mut ri = 0usize;
+            for x in 0..size {
+                if rot[y1 * size + x] <= thr {
+                    ri += 1;
+                }
+            }
+            if ri == 0 {
+                break;
+            }
+            band_ink += ri;
+            y1 += 1;
+        }
+        ink += band_ink as f64;
+        if y1 - y0 >= 2 {
+            n += 1.0;
+        }
+        y = y1;
+    }
+    (n, ink)
+}
+
+/// Best-axis selection with CHEAP candidate scoring (NN + Otsu at the caller's
+/// chosen low resolution) and the full bilinear+Sauvola flip analysis only on
+/// the winner. `core_gray` is the low-res image for scoring; `gray` is the
+/// higher-res image for the winner's flip features and glyph crops.
+pub fn textline_flip_best_axis_cheap(
+    core_gray: &[f64],
+    cw: usize,
+    ch: usize,
+    gray: &[f64],
+    width: usize,
+    height: usize,
+    axes: &[f64],
+) -> BestAxisFlip {
+    let mut best_axis = axes[0];
+    let mut best_q = (0.0f64, 0.0f64);
+    for ax in axes {
+        let (n, ink) = cheap_line_quality(core_gray, cw, ch, *ax);
+        if n > best_q.0 || (n == best_q.0 && ink > best_q.1) {
+            best_axis = *ax;
+            best_q = (n, ink);
+        }
+    }
+    let d = deskew_analyze(gray, width, height, best_axis);
+    let features = flip_features_from_lines(&d);
+    let glyph_crops = crate::glyph::glyph_crops_from_mask(&d.mask, d.size, &d.bands);
     let glyph_count = glyph_crops.len() / crate::glyph::GLYPH_DIM;
     BestAxisFlip {
         axis: best_axis,

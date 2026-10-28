@@ -135,6 +135,35 @@ fn extract_all_v2(pixels: Vec<u8>, width: usize, height: usize) -> PyResult<Vec<
     Ok(features_core::extract_all_v2(&pixels, width, height))
 }
 
+/// Hybrid-resolution extraction for the sub-10ms path: core 100 features +
+/// radon axis + boundary + docstrum at k=4, textline flip + per-glyph crops
+/// at k=2. Same 124-feature layout as `extract_all_v2` (retrain on it).
+///
+/// * pixels: `bytes` — RGB bytes (length must equal width × height × 3)
+/// * width: `int`
+/// * height: `int`
+/// * Returns: `(list[float], float, float)` — (124 features,
+///   glyph_sum_logodds, glyph_count).
+#[pyfunction]
+fn extract_all_v2_hybrid(
+    pixels: Vec<u8>,
+    width: usize,
+    height: usize,
+) -> PyResult<(Vec<f64>, f64, f64)> {
+    let expected = width * height * 3;
+    if pixels.len() != expected {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "Expected {} bytes ({}x{}x3), got {}",
+            expected,
+            width,
+            height,
+            pixels.len()
+        )));
+    }
+
+    Ok(features_core::extract_all_v2_hybrid(&pixels, width, height))
+}
+
 /// Extract per-glyph 20x20 ink-density crops from the best-axis deskew.
 /// Training input for scripts/train_glyph_classifier.py: call on an upright
 /// image for label 0 and on its 180-rotated RGB for label 1.
@@ -449,7 +478,7 @@ fn predict_v2(pixels: Vec<u8>, width: usize, height: usize) -> PyResult<Py<PyAny
     };
 
     let (features, glyph_logodds, glyph_count) =
-        features_core::extract_all_v2_with_glyph(&pixels, width, height);
+        features_core::extract_all_v2_hybrid(&pixels, width, height);
     let preds = manifest.model.predict(&features);
     let tau = if manifest.tau.is_finite() && manifest.tau > 0.0 {
         manifest.tau
@@ -519,6 +548,7 @@ fn combine_rotation_v2(features: Vec<f64>, preds: Vec<f64>, tau: f64) -> PyResul
 fn py_features(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(extract_all, m)?)?;
     m.add_function(wrap_pyfunction!(extract_all_v2, m)?)?;
+    m.add_function(wrap_pyfunction!(extract_all_v2_hybrid, m)?)?;
     m.add_function(wrap_pyfunction!(extract_glyph_crops, m)?)?;
     m.add_function(wrap_pyfunction!(extract_glyph_logodds, m)?)?;
     m.add_function(wrap_pyfunction!(load_rgb_resized, m)?)?;

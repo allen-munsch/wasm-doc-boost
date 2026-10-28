@@ -225,3 +225,32 @@ Phase 6 — release: wasm-pack build, eval_wasm/eval_pdf/bench_sobel, README
   clamp-then-`as usize` pattern for float->int conversion. Verified by
   `cargo build -p features-core` (plain lib target), which the `cargo test`
   target alone does NOT exercise — test it explicitly after any new module.
+
+---
+
+## v0.4.0 user-testing feedback (next direction, recorded 2025-11-25)
+
+Queue AFTER the sub-10ms optimization pass (currently in flight).
+
+1. **Rename the `_v2` naming mess.** `extract_all_v2`, `extract_all_v2_hybrid`,
+   `extract_all_v2_with_glyph`, `extract_all_v2_scaled`, `process_one_v2`,
+   `predict_v2`, `load_model_v2`, `train_model_v2.py`, `combine_rotation_v2`,
+   `LABELS_V2` etc. are the per-degree rework's working names. Pick clean,
+   intent-revealing names once the rework is the only path.
+
+2. **is_digital head is over-fit to shadow depth.** 3 pages rotated 80 deg
+   scored low; nearly the whole score gap between a low and a high page comes
+   from f62 = shadow_depth_std (and f61 = shadow_depth_mean), the head's
+   most-used feature, with splits clustering on it. shadow_depth_* measures
+   how dark ink is against the local background — confounded with digital vs
+   paper, not intrinsic to it. Fix: drop f61/f62 from the is_digital head OR
+   normalize them by ink contrast.
+
+3. **Add fade + overlay augmentation to training.** So the trait heads see
+   illumination/overlay variation and stop keying on absolute ink darkness.
+
+4. **Soften near-boundary scores.** is_digital outputs 0.47 and 0.16 currently
+   read as confident rejection; they should be uncertain near 0.5. Add
+   calibration/softening for the trait heads, not just the rotation confidence.
+
+Cross-check: all 10 fatura pages turned correctly and all 6 upright left alone.

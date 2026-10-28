@@ -281,7 +281,7 @@ pub fn classify_file_v2(bytes: &[u8]) -> Result<JsValue, JsValue> {
     let pixels = rgb.into_raw();
 
     let (features, glyph_logodds, glyph_count) =
-        features_core::extract_all_v2_with_glyph(&pixels, width as usize, height as usize);
+        features_core::extract_all_v2_hybrid(&pixels, width as usize, height as usize);
     let preds = model.predict(&features);
     let d = combine_rotation_calibrated(
         &features,
@@ -298,6 +298,35 @@ pub fn classify_file_v2(bytes: &[u8]) -> Result<JsValue, JsValue> {
     for (label, &pred) in manifest.labels.iter().zip(preds.iter()) {
         js_sys::Reflect::set(&result, &JsValue::from_str(label), &JsValue::from_f64(pred)).unwrap();
     }
+    // Binarized doc-trait decisions at the shipped per-label thresholds
+    // (selected on the calibration split for F1), so consumers don't have to
+    // re-derive the operating point from raw probabilities.
+    let trait_labels = manifest.trait_labels(&features);
+    let tl_obj = js_sys::Object::new();
+    let tu_obj = js_sys::Object::new();
+    let band = 0.08f64; // near-boundary band: present as uncertain, not confident
+    for (i, label) in manifest.labels.iter().take(5).enumerate() {
+        let p = preds[i];
+        let t = manifest
+            .label_thresholds
+            .as_ref()
+            .and_then(|v| v.get(i).copied())
+            .unwrap_or(0.5);
+        js_sys::Reflect::set(
+            &tl_obj,
+            &JsValue::from_str(label),
+            &JsValue::from_bool(trait_labels[i]),
+        )
+        .unwrap();
+        js_sys::Reflect::set(
+            &tu_obj,
+            &JsValue::from_str(label),
+            &JsValue::from_bool((p - t).abs() <= band),
+        )
+        .unwrap();
+    }
+    js_sys::Reflect::set(&result, &JsValue::from_str("trait_labels"), &tl_obj)?;
+    js_sys::Reflect::set(&result, &JsValue::from_str("trait_uncertain"), &tu_obj)?;
     js_sys::Reflect::set(
         &result,
         &JsValue::from_str("rotation_deg"),

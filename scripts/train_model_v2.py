@@ -92,6 +92,25 @@ def _params_for(name: str) -> dict[str, Any]:
     return p
 
 
+# Feature indices the is_digital head must NOT see (v0.4.0 feedback): f61/f62
+# are shadow_depth_mean/std, a scan artifact that made is_digital overfit
+# (3 held-out pages @80deg scored low). Masked to a constant during training so
+# the 124-column index space is preserved (XGBoost dump indices stay aligned
+# with inference); a constant column has zero split gain, so the head never
+# uses them. Index space: color 19 + edges 20 + texture 16 + noise 4 = 59, then
+# shadow [dark_ratio, illum_var, shadow_mean, shadow_std, shadow_edge] = 59..63.
+HEAD_DROPPED_FEATURES: dict[str, list[int]] = {"is_digital": [61, 62]}
+
+
+def _head_X(X, name):
+    drops = HEAD_DROPPED_FEATURES.get(name)
+    if not drops:
+        return X
+    Xm = X.copy()
+    Xm[:, drops] = 0.0
+    return Xm
+
+
 def base_filename(fn: str) -> str:
     return fn.rsplit("_rot", 1)[0]
 
@@ -153,7 +172,7 @@ def split_groups(X, y, filenames, rotation_deg):
     return train_idx, cal_idx, test_idx
 
 
-def train_models(X_train, y_train):
+def train_models(X_train, y_train, device="cpu"):
     models = []
     for i, name in enumerate(LABEL_NAMES):
         pos = y_train[:, i].sum()
@@ -161,6 +180,7 @@ def train_models(X_train, y_train):
         scale_pos_weight = min(neg / max(pos, 1), 20.0) if pos > 0 else 1.0
         params = _params_for(name)
         model = xgb.XGBClassifier(
+            device=device,
             tree_method="hist",
             objective="binary:logistic",
             scale_pos_weight=scale_pos_weight,
@@ -176,7 +196,7 @@ def train_models(X_train, y_train):
             random_state=42,
             n_jobs=-1,
         )
-        model.fit(X_train, y_train[:, i])
+        model.fit(_head_X(X_train, name), y_train[:, i])
         models.append(model)
         print(
             f"  {name}: {model.n_estimators} trees, pos_weight={scale_pos_weight:.1f}"
@@ -185,7 +205,10 @@ def train_models(X_train, y_train):
 
 
 def predict(models, X):
-    return [m.predict_proba(X)[:, 1] for m in models]
+    return [
+        m.predict_proba(_head_X(X, name))[:, 1]
+        for m, name in zip(models, LABEL_NAMES)
+    ]
 
 
 def combine_rotation_py(X, preds, calibration=None):
@@ -272,12 +295,19 @@ def rotation_metrics(X, y, rotation_deg, P, tag, filenames=None, calibration=Non
     axis_err = circular_err(axis_deg, true_axis, period=180.0)
 
     is_doc = y[:, 0].astype(bool)
+    fatura2 = (
+        np.array([str(f).startswith("fatura2/") for f in filenames])
+        if filenames is not None
+        else np.zeros(len(y), dtype=bool)
+    )
     out = {
         "strict_mae_deg_all": float(np.mean(err)),
         "strict_mae_deg_docs": float(np.mean(err[is_doc])),
         "pm1_accuracy_all": float(np.mean(err <= 1.0)),
         "pm1_accuracy_docs": float(np.mean(err[is_doc] <= 1.0)),
         "axis_only_accuracy_1deg": float(np.mean(axis_err <= 1.0)),
+        "axis_only_accuracy_1deg_docs": float(np.mean(axis_err[is_doc] <= 1.0)),
+        "fatura2_pm1_accuracy": float(np.mean(err[fatura2] <= 1.0)),
         "accepted_flip_rate_strict": float(np.mean(err > 90.0)),
         "flip_accuracy": float(np.mean(flip_pred == y[:, 5])),
         "trust_auc": float(roc_auc_score(y[:, 6], trust_p)),
@@ -291,11 +321,12 @@ def rotation_metrics(X, y, rotation_deg, P, tag, filenames=None, calibration=Non
     return out
 
 
-def trait_metrics(y, P, tag):
+def trait_metrics(y, P, tag, thresholds=None):
     metrics = {}
     print(f"\n=== Trait metrics [{tag}] ===")
     for i, name in enumerate(LABEL_NAMES[:5]):
-        yp = (P[i] >= 0.5).astype(int)
+        t = 0.5 if thresholds is None else thresholds.get(name, 0.5)
+        yp = (P[i] >= t).astype(int)
         auc = roc_auc_score(y[:, i], P[i])
         precision, recall, f1, _ = precision_recall_fscore_support(
             y[:, i], yp, average="binary", zero_division=0
@@ -305,11 +336,38 @@ def trait_metrics(y, P, tag):
             "precision": float(precision),
             "recall": float(recall),
             "f1": float(f1),
+            "threshold": float(t),
         }
         print(
-            f"  {name}: AUC={auc:.4f}, P={precision:.3f}, R={recall:.3f}, F1={f1:.3f}"
+            f"  {name} (t={t:.2f}): AUC={auc:.4f}, P={precision:.3f}, R={recall:.3f}, F1={f1:.3f}"
         )
     return metrics
+
+
+def select_trait_thresholds(y_cal, P_cal):
+    """Per-label decision thresholds maximizing held-out F1 on the cal set.
+
+    The rare positive classes (crumpled/shadow) train with heavy
+    scale_pos_weight, so their raw probabilities sit above the F1-optimal
+    decision boundary; a fixed 0.5 threshold over-predicts them (shadow
+    precision 0.32 at 0.5 vs 0.40 at 0.6). Grid-search the cal set for the
+    F1-optimal threshold and ship it in the manifest so inference applies the
+    same boundary instead of a blanket 0.5.
+    """
+    thresholds = {}
+    print("\n=== Trait threshold selection (cal) ===")
+    for i, name in enumerate(LABEL_NAMES[:5]):
+        best_t, best_f1 = 0.5, -1.0
+        for t in np.arange(0.25, 0.81, 0.02):
+            yp = (P_cal[i] >= t).astype(int)
+            _, _, f1, _ = precision_recall_fscore_support(
+                y_cal[:, i], yp, average="binary", zero_division=0
+            )
+            if f1 > best_f1:
+                best_f1, best_t = f1, float(t)
+        thresholds[name] = best_t
+        print(f"  {name}: t={best_t:.2f} (cal F1={best_f1:.4f})")
+    return thresholds
 
 
 def calibrate_confidence(X_cal, y_cal, rotation_cal, P_cal, filenames_cal=None):
@@ -377,7 +435,7 @@ def calibrate_confidence(X_cal, y_cal, rotation_cal, P_cal, filenames_cal=None):
     return rows, chosen, curve
 
 
-def export_merged_model(models, output_path, tau, calibration=None):
+def export_merged_model(models, output_path, tau, calibration=None, label_thresholds=None):
     all_trees = []
     trees_per_label = []
     for model in models:
@@ -390,13 +448,21 @@ def export_merged_model(models, output_path, tau, calibration=None):
     # evenly; trees_per_label tells it the exact boundaries. `version` is the
     # release tag string this model ships in, not a format counter — keep it
     # in lockstep with package.json/Cargo.toml when cutting a release.
+    # Serialize thresholds index-aligned with LABEL_NAMES (gbdt-core expects a
+    # Vec<f64> in label order; flip/trust have no trait threshold, so 0.5).
+    thresholds_list = (
+        [label_thresholds.get(name, 0.5) for name in LABEL_NAMES]
+        if label_thresholds is not None
+        else None
+    )
     manifest = {
         "labels": LABEL_NAMES,
         "tau": tau,
-        "version": "0.4.0",
+        "version": "0.5.0",
         "trees": all_trees,
         "trees_per_label": trees_per_label,
         "confidence_calibration": calibration,
+        "label_thresholds": thresholds_list,
     }
     with open(output_path, "w") as f:
         json.dump(manifest, f)
@@ -412,22 +478,35 @@ def main():
     parser.add_argument("--features", required=True)
     parser.add_argument("--output", default="data/model_v4.json")
     parser.add_argument("--report", default="data/report_v4.json")
+    parser.add_argument("--device", default="cpu", help="xgboost device (cpu or cuda)")
+    parser.add_argument(
+        "--metrics",
+        default=None,
+        help="write a goal_gate-compatible metrics JSON here (rotation/doc_traits/hybrid_ms)",
+    )
+    parser.add_argument(
+        "--hybrid-ms",
+        type=float,
+        default=None,
+        help="hybrid_ms_per_image value to record (measured separately via profile_v2)",
+    )
     args = parser.parse_args()
 
     X, y, filenames, rotation_deg = load_data(args.features)
     train_idx, cal_idx, test_idx = split_groups(X, y, filenames, rotation_deg)
 
     print("\n=== Training ===")
-    models = train_models(X[train_idx], y[train_idx])
+    models = train_models(X[train_idx], y[train_idx], args.device)
 
     P_train = predict(models, X[train_idx])
     P_cal = predict(models, X[cal_idx])
     P_test = predict(models, X[test_idx])
 
+    trait_thresholds = select_trait_thresholds(y[cal_idx], P_cal)
     report = {
-        "train": trait_metrics(y[train_idx], P_train, "train"),
-        "cal": trait_metrics(y[cal_idx], P_cal, "cal"),
-        "test": trait_metrics(y[test_idx], P_test, "test"),
+        "train": trait_metrics(y[train_idx], P_train, "train", trait_thresholds),
+        "cal": trait_metrics(y[cal_idx], P_cal, "cal", trait_thresholds),
+        "test": trait_metrics(y[test_idx], P_test, "test", trait_thresholds),
         "rotation_train": rotation_metrics(
             X[train_idx],
             y[train_idx],
@@ -478,12 +557,34 @@ def main():
         )
     report["pinned_tau"] = pinned_tau
 
-    export_merged_model(models, args.output, pinned_tau, calibration)
+    report["label_thresholds"] = trait_thresholds
+    export_merged_model(models, args.output, pinned_tau, calibration, trait_thresholds)
 
     if args.report:
         with open(args.report, "w") as f:
             json.dump(report, f, indent=2)
         print(f"Report written: {args.report}")
+
+    if args.metrics:
+        rot_test = report["rotation_test"]
+        metrics = {
+            "rotation": {
+                "per_degree_acc_pm1_documents": rot_test["pm1_accuracy_docs"],
+                "circular_mae_deg_documents": rot_test["strict_mae_deg_docs"],
+                "axis_only_acc_documents": rot_test["axis_only_accuracy_1deg_docs"],
+                "fatura2_pm1_acc": rot_test["fatura2_pm1_accuracy"],
+            },
+            "doc_traits": {
+                f"{name}_f1": report["test"][name]["f1"]
+                for name in LABEL_NAMES[:5]
+            },
+        }
+        if args.hybrid_ms is not None:
+            metrics["hybrid_ms_per_image"] = args.hybrid_ms
+        with open(args.metrics, "w") as f:
+            json.dump(metrics, f, indent=2)
+        print(f"Metrics written: {args.metrics}")
+        print(json.dumps(metrics, indent=2))
 
 
 if __name__ == "__main__":

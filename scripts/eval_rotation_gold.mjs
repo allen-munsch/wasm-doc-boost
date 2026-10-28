@@ -16,8 +16,8 @@ const { initSync, classify_file_v2, load_model_v2, model_version } = await impor
   resolve(ROOT, 'frontend/wasm_bridge.js')
 );
 initSync(new WebAssembly.Module(wasmBytes));
-load_model_v2(readFileSync(resolve(ROOT, 'data/model_v6.json'), 'utf-8'));
-if (model_version() !== '0.4.0') throw new Error(`expected model 0.4.0, got ${model_version()}`);
+load_model_v2(readFileSync(resolve(ROOT, 'data/model_v8.json'), 'utf-8'));
+if (model_version() !== '0.5.0') throw new Error(`expected model 0.5.0, got ${model_version()}`);
 
 function circularErr(a, b, period = 360) {
   const d = Math.abs(a - b);
@@ -27,7 +27,8 @@ const mean = (a) => a.reduce((x, y) => x + y, 0) / a.length;
 const frac = (a) => a.filter(Boolean).length / a.length;
 
 const errs = [], axisErrs = [], confs = [];
-let n = 0, nDoc = 0, notDoc = 0, review = 0, flipErr = 0;
+const acceptedErrs = [];
+let n = 0, nDoc = 0, notDoc = 0, review = 0, flipErr = 0, accepted = 0, acceptedFlip = 0;
 const dist = {};
 
 for (let i = START; i < START + N; i++) {
@@ -44,6 +45,11 @@ for (let i = START; i < START + N; i++) {
   axisErrs.push(ae);
   confs.push(r.rotation_confidence);
   if (r.needs_review) review++;
+  else {
+    accepted++;
+    acceptedErrs.push(e);
+    if (e > 90) acceptedFlip++;
+  }
   if (e > 90) flipErr++;
   const b = Math.round(deg);
   dist[b] = (dist[b] || 0) + 1;
@@ -68,6 +74,9 @@ console.log(JSON.stringify({
   axis_pm1_accuracy: +frac(axisErrs.map((e) => e <= 1)).toFixed(4),
   flip_error_rate_strict: +(flipErr / n).toFixed(4),
   needs_review_rate: +(review / n).toFixed(4),
+  accepted_flip_rate: accepted > 0 ? +(acceptedFlip / accepted).toFixed(4) : 0,
+  accepted_circular_mae_deg: accepted > 0 ? +mean(acceptedErrs).toFixed(3) : 0,
+  accepted_n: accepted,
   mean_confidence: +mean(confs).toFixed(3),
   rotation_deg_distribution: Object.keys(dist).sort((a, b) => a - b).map((k) => [k, dist[k]]),
 }, null, 1));

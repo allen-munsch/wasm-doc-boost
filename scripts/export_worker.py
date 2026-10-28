@@ -26,6 +26,8 @@ import numpy as np
 import py_features
 from PIL import Image
 
+import gpu_rotate
+
 LABEL_NAMES = [
     "is_document",
     "is_digital",
@@ -72,6 +74,28 @@ def median_border_color(rgb, border=BORDER_FILL_WIDTH):
     right = a[border:-border, -border:].reshape(-1, 3)
     border_px = np.concatenate([top, bottom, left, right], axis=0)
     return tuple(int(v) for v in np.median(border_px, axis=0))
+
+
+def augment_source(img, fname):
+    """Deterministic mild degradation for robustness training (v0.4.0 feedback).
+
+    Seeded by the base filename so every angle of one image shares the same
+    augmentation (the theta/theta+180 flip-contrast pairs stay pure). Fade
+    pushes ink toward the paper background; overlay adds faint scan noise.
+    Rotation and doc-trait labels are unchanged.
+    """
+    rng = random.Random(hashlib.sha256(fname.encode()).digest())
+    a = np.asarray(img, dtype=np.float32)
+    fill = np.array(median_border_color(img), dtype=np.float32)
+
+    if rng.random() < 0.5:  # fade toward paper
+        t = rng.uniform(0.35, 0.65)
+        a = a + (fill - a) * t
+
+    if rng.random() < 0.5:  # overlay faint scan noise
+        a = a + rng.gauss(0.0, 6.0)
+
+    return Image.fromarray(np.clip(a, 0.0, 255.0).astype(np.uint8), "RGB")
 
 
 def v2_angles(fname):
@@ -126,7 +150,7 @@ def process_one(fname, label_vec, images_dir):
         return None
 
 
-def process_one_v2(fname, label_vec, images_dir):
+def process_one_v2(fname, label_vec, images_dir, gpu=False):
     img_path = os.path.join(images_dir, fname)
     if not os.path.exists(img_path):
         return None
@@ -138,19 +162,23 @@ def process_one_v2(fname, label_vec, images_dir):
         pixels, rw, rh = py_features.load_rgb_resized(raw, MAX_LONG_EDGE)
         rgb = np.frombuffer(pixels, dtype=np.uint8).reshape(rh, rw, 3)
         img = Image.fromarray(rgb, "RGB")
+        img = augment_source(img, fname)
         fill = median_border_color(img)
 
         feats_list, labels_list, fnames_list, angles_list = [], [], [], []
         for angle in v2_angles(fname):
             if angle == 0:
-                rotated = img
+                rotated_rgb = rgb
+            elif gpu:
+                rotated_rgb = gpu_rotate.rotate_rgb(rgb, angle, fill)
             else:
                 rotated = img.rotate(
                     angle, expand=True, resample=Image.BICUBIC, fillcolor=fill
                 )
-            rw, rh = rotated.size
-            pixels = np.array(rotated, dtype=np.uint8).tobytes()
-            feats = py_features.extract_all_v2(pixels, rw, rh)
+                rotated_rgb = np.array(rotated, dtype=np.uint8)
+            h2, w2 = rotated_rgb.shape[:2]
+            pixels = np.ascontiguousarray(rotated_rgb).tobytes()
+            feats, _, _ = py_features.extract_all_v2_hybrid(pixels, w2, h2)
             assert len(feats) == V2_FEAT_COUNT, (
                 f"expected {V2_FEAT_COUNT} features, got {len(feats)}"
             )
@@ -199,6 +227,7 @@ def main():
     parser.add_argument("--output", required=True)
     parser.add_argument("--labels-csv", required=True)
     parser.add_argument("--v2", action="store_true", help="per-degree rework export")
+    parser.add_argument("--gpu", action="store_true", help="rotate on CUDA (radon stays CPU)")
     args = parser.parse_args()
 
     labels = {}
@@ -215,7 +244,7 @@ def main():
             errors += 1
             continue
         if args.v2:
-            result = process_one_v2(fname, labels[fname], args.images)
+            result = process_one_v2(fname, labels[fname], args.images, gpu=args.gpu)
             if result is None:
                 errors += 1
             else:

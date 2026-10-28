@@ -40,12 +40,36 @@ pub mod shadow;
 pub mod textline;
 pub mod texture;
 
+/// Noise + shadow features: the 9 core indices 55..=63 (noise
+/// high_pass_residual_variance, blockiness_h, blockiness_v, gradient_snr;
+/// shadow dark_ratio, illum_var, shadow_depth_mean, shadow_depth_std,
+/// shadow_edge). Kept as one function so the hybrid-resolution path can
+/// recompute them at full resolution — k=4 averaging destroys high-frequency
+/// noise and shadow structure (blockiness collapses to 0, crumpled/shadow F1
+/// drops below target).
+pub fn extract_noise_shadow(gray: &[f64], width: usize, height: usize) -> Vec<f64> {
+    let mut features = Vec::with_capacity(9);
+    let residual_var = crate::noise::high_pass_residual_variance(gray, width, height);
+    features.push(residual_var);
+    features.extend(crate::noise::jpeg_blockiness(gray, width, height));
+    features.push(crate::noise::gradient_snr_given_residual(
+        gray, width, height, residual_var,
+    ));
+    features.extend(crate::shadow::shadow_features(gray, width, height));
+    features
+}
+
+/// Index of the first noise feature in the core 100-feature vector.
+/// color 19 + edges 20 + texture 16 = 55, then noise 4 (55..58) + shadow 5
+/// (59..63). Asserted by `noise_shadow_index_contract` below.
+pub const NOISE_SHADOW_START: usize = 55;
+
 /// Extract the 100 pre-rotation pixel heuristics from raw RGB bytes.
 ///
 /// Shared by `extract_all` (backward-compatible 103 = 100 + 3 zero-pad) and
 /// `extract_all_v2` (116 = 100 + 16 rotation signals for the per-degree
 /// rework).
-fn extract_core(pixels: &[u8], width: usize, height: usize) -> Vec<f64> {
+pub fn extract_core(pixels: &[u8], width: usize, height: usize) -> Vec<f64> {
     let gray = crate::to_grayscale(pixels, width, height);
     let mut features = Vec::new();
 
@@ -69,20 +93,16 @@ fn extract_core(pixels: &[u8], width: usize, height: usize) -> Vec<f64> {
     features.extend(crate::texture::glcm_features(&gray, width, height));
     features.push(crate::texture::fractal_dimension(&gray, width, height));
 
-    features.push(crate::noise::high_pass_residual_variance(
-        &gray, width, height,
-    ));
-    features.extend(crate::noise::jpeg_blockiness(&gray, width, height));
-    features.push(crate::noise::gradient_snr(&gray, width, height));
-
-    features.extend(crate::shadow::shadow_features(&gray, width, height));
+    features.extend(crate::extract_noise_shadow(&gray, width, height));
 
     features.extend(crate::crumple::lbp_variance(&gray, width, height));
     features.push(crate::crumple::edge_density_std(&gray, width, height));
     features.push(crate::crumple::texture_anisotropy(&gray, width, height));
     features.push(crate::crumple::peak_local_entropy(&gray, width, height));
 
-    features.extend(crate::document::document_features(pixels, width, height));
+    features.extend(crate::document::document_features_gray(
+        &gray, pixels, width, height,
+    ));
     features.extend(crate::projection::projection_features(&gray, width, height));
     features.extend(crate::ink::ink_features(&gray, width, height));
 
@@ -196,6 +216,112 @@ pub fn extract_all_v2_with_glyph(
     (features, sum_logodds, count as f64)
 }
 
+/// Box-downsample an RGB image by integer factor `k` (each channel averaged
+/// over a k×k block, rounded to nearest). Returns (pixels, new_w, new_h).
+/// Used by `extract_all_v2_scaled` and the resolution-validation harness.
+pub fn downsample_rgb(
+    pixels: &[u8],
+    width: usize,
+    height: usize,
+    k: usize,
+) -> (Vec<u8>, usize, usize) {
+    if k <= 1 {
+        return (pixels.to_vec(), width, height);
+    }
+    let nw = width / k;
+    let nh = height / k;
+    if nw == 0 || nh == 0 {
+        return (pixels.to_vec(), width, height);
+    }
+    let mut out = Vec::with_capacity(nw * nh * 3);
+    let half = ((k * k) / 2) as u32;
+    let div = (k * k) as u32;
+    for y in 0..nh {
+        for x in 0..nw {
+            let mut r = 0u32;
+            let mut g = 0u32;
+            let mut b = 0u32;
+            for dy in 0..k {
+                let row = (y * k + dy) * width;
+                for dx in 0..k {
+                    let i = (row + x * k + dx) * 3;
+                    r += pixels[i] as u32;
+                    g += pixels[i + 1] as u32;
+                    b += pixels[i + 2] as u32;
+                }
+            }
+            out.push(((r + half) / div) as u8);
+            out.push(((g + half) / div) as u8);
+            out.push(((b + half) / div) as u8);
+        }
+    }
+    (out, nw, nh)
+}
+
+/// `extract_all_v2` on a k× box-downsampled copy of the input: the entire
+/// feature pipeline (core + rotation) runs at reduced resolution. This is
+/// the sub-10ms path — measure accuracy drift before retraining on it.
+pub fn extract_all_v2_scaled(
+    pixels: &[u8],
+    width: usize,
+    height: usize,
+    k: usize,
+) -> Vec<f64> {
+    let (px, w, h) = downsample_rgb(pixels, width, height, k);
+    extract_all_v2(&px, w, h)
+}
+
+/// Hybrid-resolution extraction for the sub-10ms path:
+/// - core 100 features + radon axis + boundary + docstrum at k=4 (128px long
+///   edge): the radon axis set survives (worst 0.42 deg over real invoices),
+///   and these are aggregate statistics.
+/// - textline flip + per-glyph crops at k=2 (256px long edge): the glyph
+///   classifier needs ~256px to resolve ascender/descender shape; k=4 destroys
+///   it (17% flip accuracy vs 93% full-res), k=2 holds (91%).
+///
+/// Returns `(features, glyph_sum_logodds, glyph_count)` with the same
+/// 124-feature layout as `extract_all_v2` (so the trained GBDT can be retrained
+/// on these features unchanged).
+pub fn extract_all_v2_hybrid(
+    pixels: &[u8],
+    width: usize,
+    height: usize,
+) -> (Vec<f64>, f64, f64) {
+    let (core_px, cw, ch) = downsample_rgb(pixels, width, height, 4);
+    let (flip_px, fw, fh) = downsample_rgb(pixels, width, height, 2);
+    let core_gray = crate::to_grayscale(&core_px, cw, ch);
+    let flip_gray = crate::to_grayscale(&flip_px, fw, fh);
+
+    let mut features = extract_core(&core_px, cw, ch);
+
+    // Noise/shadow features need full resolution: k=4 averaging destroys
+    // high-frequency noise (blockiness -> 0) and shadow depth structure,
+    // which the crumpled/shadow heads rely on. Recompute them from the
+    // full-res grayscale and splice them into indices 55..=63.
+    let full_gray = crate::to_grayscale(pixels, width, height);
+    let ns = crate::extract_noise_shadow(&full_gray, width, height);
+    features[NOISE_SHADOW_START..NOISE_SHADOW_START + ns.len()].copy_from_slice(&ns);
+
+    let curve = crate::radon::radon_curve(&core_gray, cw, ch);
+    let axes = crate::radon::radon_top_axes(&curve, 4);
+    let best = crate::textline::textline_flip_best_axis_cheap(
+        &core_gray, cw, ch, &flip_gray, fw, fh, &axes,
+    );
+    let (peakiness, peak_margin, concentration) = crate::radon::radon_summary(&curve);
+
+    features.push(best.axis);
+    features.push(peakiness);
+    features.push(peak_margin);
+    features.push(concentration);
+    features.extend_from_slice(&best.features[0..6]);
+    features.extend(crate::boundary::boundary_features(&core_px, cw, ch));
+    features.extend(crate::ink::docstrum_axis(&core_gray, cw, ch));
+    features.extend_from_slice(&best.features[6..14]);
+
+    let (sum_logodds, count) = crate::glyph::glyph_logodds_from_crops(&best.glyph_crops);
+    (features, sum_logodds, count as f64)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -221,6 +347,22 @@ mod tests {
         assert_eq!(
             rotation_features(&to_grayscale(&px, 64, 64), &px, 64, 64).len(),
             24
+        );
+    }
+
+    #[test]
+    fn noise_shadow_index_contract() {
+        // extract_core must place extract_noise_shadow exactly at
+        // NOISE_SHADOW_START..NOISE_SHADOW_START+9, so the hybrid path can
+        // splice full-res noise/shadow into the k=4 core vector.
+        let px = sample_rgb(128, 128);
+        let gray = to_grayscale(&px, 128, 128);
+        let core = extract_core(&px, 128, 128);
+        let ns = extract_noise_shadow(&gray, 128, 128);
+        assert_eq!(ns.len(), 9);
+        assert_eq!(
+            &core[NOISE_SHADOW_START..NOISE_SHADOW_START + ns.len()],
+            &ns[..]
         );
     }
 

@@ -25,6 +25,21 @@ pub const RADON_DEG_PER_BIN: f64 = 3.0;
 /// `curve[i]` is the horizontal-projection variance of the image rotated by
 /// `-i * 3` degrees. The peak bin is the text-line axis.
 pub fn radon_curve(gray: &[f64], width: usize, height: usize) -> Vec<f64> {
+    radon_curve_strided(gray, width, height, 1, 1)
+}
+
+/// Like `radon_curve`, but samples every `sx`-th output column and `sy`-th
+/// output row. The projection variance is an aggregate over the canvas, so
+/// mild strides cut the radon cost; x-only stride preserves the winner axis
+/// while both-axes stride perturbs near-tie peaks (validated in
+/// radon_downsample / winner_agree).
+pub fn radon_curve_strided(
+    gray: &[f64],
+    width: usize,
+    height: usize,
+    sx: usize,
+    sy: usize,
+) -> Vec<f64> {
     // Pad to a max(w,h) square, centred, filled with the border colour. The
     // padding keeps every rotation inside the sampling canvas: a landscape
     // canvas cannot hold its own 90-degree rotation (the content would be
@@ -48,7 +63,7 @@ pub fn radon_curve(gray: &[f64], width: usize, height: usize) -> Vec<f64> {
     let mut curve = Vec::with_capacity(RADON_BINS);
     for i in 0..RADON_BINS {
         let deg = i as f64 * RADON_DEG_PER_BIN;
-        curve.push(projection_variance_at(&padded, size, size, deg));
+        curve.push(projection_variance_at(&padded, size, size, deg, sx, sy));
     }
     curve
 }
@@ -83,37 +98,56 @@ fn border_median(gray: &[f64], width: usize, height: usize) -> f64 {
     samples[samples.len() / 2]
 }
 
-/// Variance of the horizontal projection of a square image rotated by `-deg`.
-fn projection_variance_at(gray: &[f64], width: usize, height: usize, deg: f64) -> f64 {
+/// Variance of the horizontal projection of a square image rotated by `-deg`,
+/// sampling every `sx`-th output column and `sy`-th output row (1 = full).
+fn projection_variance_at(
+    gray: &[f64],
+    width: usize,
+    height: usize,
+    deg: f64,
+    sx: usize,
+    sy: usize,
+) -> f64 {
     if width == 0 || height == 0 {
         return 0.0;
     }
+    let sx = sx.max(1);
+    let sy = sy.max(1);
     let rad = deg.to_radians();
     let sin_t = libm::sin(rad);
     let cos_t = libm::cos(rad);
     let cx = (width as f64 - 1.0) / 2.0;
     let cy = (height as f64 - 1.0) / 2.0;
-    let n = (width * height) as f64;
+    let nrows = (height + sy - 1) / sy;
+    let ncols = (width + sx - 1) / sx;
+    let n = (nrows * ncols) as f64;
 
-    let mut row_sums = vec![0.0f64; height];
+    let mut row_sums = vec![0.0f64; nrows];
     let mut total = 0.0;
+    let last_x = width as f64 - 1.0;
+    let last_y = height as f64 - 1.0;
+    let step_x = cos_t * sx as f64;
+    let step_y = sin_t * sx as f64;
 
-    for (y, slot) in row_sums.iter_mut().enumerate() {
+    for (ry, slot) in row_sums.iter_mut().enumerate() {
+        let y = ry * sy;
         let yc = y as f64 - cy;
+        // Output point (x, y) back-rotated into the source: rotating the
+        // image by -deg samples the source at rotate(+deg) of the output
+        // point. Nearest neighbour, clamped to the border. xs/ys are linear
+        // in x, so stride by incrementing step_x/step_y per sampled column.
+        let mut xs = cx - cx * cos_t - yc * sin_t;
+        let mut ys = cy - cx * sin_t + yc * cos_t;
         let mut row_sum = 0.0;
-        for x in 0..width {
-            let xc = x as f64 - cx;
-            // Output point (x, y) back-rotated into the source: rotating the
-            // image by -deg samples the source at rotate(+deg) of the output
-            // point. Nearest neighbour, clamped to the border.
-            let xs = xc * cos_t - yc * sin_t + cx;
-            let ys = xc * sin_t + yc * cos_t + cy;
+        for _ in 0..ncols {
             // Nearest neighbour: shift by 0.5 then clamp-then-cast, the
             // core-only pattern used across features-core (f64::round and
             // f64::floor are std-gated on this toolchain).
-            let xi = (xs + 0.5).clamp(0.0, width as f64 - 1.0) as usize;
-            let yi = (ys + 0.5).clamp(0.0, height as f64 - 1.0) as usize;
+            let xi = (xs + 0.5).clamp(0.0, last_x) as usize;
+            let yi = (ys + 0.5).clamp(0.0, last_y) as usize;
             row_sum += gray[yi * width + xi];
+            xs += step_x;
+            ys += step_y;
         }
         *slot = row_sum;
         total += row_sum;
@@ -122,11 +156,11 @@ fn projection_variance_at(gray: &[f64], width: usize, height: usize, deg: f64) -
     let mean = total / n;
     let mut var = 0.0;
     for &row_sum in row_sums.iter() {
-        let row_mean = row_sum / width as f64;
+        let row_mean = row_sum / ncols as f64;
         let d = row_mean - mean;
         var += d * d;
     }
-    var / height as f64
+    var / nrows as f64
 }
 
 /// Index and value of the maximum of a slice.

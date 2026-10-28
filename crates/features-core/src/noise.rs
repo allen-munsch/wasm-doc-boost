@@ -47,8 +47,11 @@ fn median_filter_5x5(gray: &[f64], width: usize, height: usize) -> Vec<f64> {
                     k += 1;
                 }
             }
-            // Sort window and take median
-            window.sort_by(|a, b| a.partial_cmp(b).unwrap_or(core::cmp::Ordering::Equal));
+            // Exact median via quickselect on the f64 bit pattern. All
+            // values are finite and in [0, 255] (grayscale), so IEEE-754
+            // bit ordering equals numeric ordering. Avoids the slow
+            // `partial_cmp` closure that dominated the k4 hybrid profile.
+            window.select_nth_unstable_by(12, |a, b| a.to_bits().cmp(&b.to_bits()));
             result[y as usize * width + x as usize] = window[12];
         }
     }
@@ -172,7 +175,18 @@ pub fn jpeg_blockiness(gray: &[f64], width: usize, height: usize) -> Vec<f64> {
 /// Lower SNR → noisy/natural images.
 pub fn gradient_snr(gray: &[f64], width: usize, height: usize) -> f64 {
     let residual_var = high_pass_residual_variance(gray, width, height);
+    gradient_snr_given_residual(gray, width, height, residual_var)
+}
 
+/// Gradient SNR with a pre-computed high-pass residual variance, so callers
+/// that also emit the residual variance as its own feature run the 5x5 median
+/// filter once instead of twice.
+pub fn gradient_snr_given_residual(
+    gray: &[f64],
+    width: usize,
+    height: usize,
+    residual_var: f64,
+) -> f64 {
     // Compute mean Sobel magnitude manually to avoid dependency
     let mut sum_mag = 0.0;
     let mut count = 0u32;

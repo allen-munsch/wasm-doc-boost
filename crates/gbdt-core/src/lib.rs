@@ -198,7 +198,39 @@ pub fn combine_rotation_calibrated(
     calibration: Option<&[f64]>,
     glyph: Option<GlyphEvidence>,
 ) -> RotationDecision {
-    let axis_rad = features[RADON_AXIS_INDEX];
+    let boundary_visible = features.get(BOUNDARY_VISIBLE_INDEX).copied().unwrap_or(0.0);
+    let boundary_axis = features
+        .get(BOUNDARY_LONG_EDGE_INDEX)
+        .copied()
+        .unwrap_or_else(|| features[RADON_AXIS_INDEX]);
+    let docstrum_conc = features.get(DOCSTRUM_CONC_INDEX).copied().unwrap_or(0.0);
+    let docstrum_axis = features
+        .get(DOCSTRUM_MEAN_INDEX)
+        .map(|m| (m + core::f64::consts::FRAC_PI_2).rem_euclid(core::f64::consts::PI))
+        .unwrap_or_else(|| features[RADON_AXIS_INDEX]);
+
+    let mut axis_rad = features[RADON_AXIS_INDEX];
+    // Independent axis consensus: the boundary minAreaRect and the docstrum
+    // inter-row direction are near-perfect on bounded invoices, while the
+    // radon response can lock onto a diagonal graphic (~50 deg off) or carry
+    // a few degrees of fold bias. When both independent votes agree, use them
+    // to correct the radon axis (previously they were only reported as an
+    // agreement count, never used to fix the answer).
+    if boundary_visible >= 0.5
+        && docstrum_conc >= DOCSTRUM_CONCENTRATION_MIN
+        && axis_err_rad(boundary_axis, docstrum_axis) <= AXIS_AGREE_TOLERANCE_RAD
+    {
+        let consensus = boundary_axis;
+        if axis_err_rad(consensus, axis_rad) > AXIS_AGREE_TOLERANCE_RAD {
+            axis_rad = consensus;
+        } else {
+            let cdeg = consensus.to_degrees().rem_euclid(180.0);
+            if cdeg < 1.0 || cdeg > 179.0 || (cdeg - 90.0).abs() < 1.0 {
+                axis_rad = consensus;
+            }
+        }
+    }
+
     let mut axis_deg = axis_rad.to_degrees().rem_euclid(180.0);
     if axis_deg < 1.0 || axis_deg > 179.0 {
         axis_deg = 0.0;
@@ -254,20 +286,15 @@ pub fn combine_rotation_calibrated(
     // text axis) is a third when it is concentrated enough to be meaningful.
     let mut axis_vote_count = 1.0f64;
     let mut axis_agreement = 1.0f64;
-    let boundary_visible = features.get(BOUNDARY_VISIBLE_INDEX).copied().unwrap_or(0.0);
     if boundary_visible >= 0.5 {
         axis_vote_count += 1.0;
-        let b = features.get(BOUNDARY_LONG_EDGE_INDEX).copied().unwrap_or(axis_rad);
-        if axis_err_rad(b, axis_rad) <= AXIS_AGREE_TOLERANCE_RAD {
+        if axis_err_rad(boundary_axis, axis_rad) <= AXIS_AGREE_TOLERANCE_RAD {
             axis_agreement += 1.0;
         }
     }
-    let docstrum_conc = features.get(DOCSTRUM_CONC_INDEX).copied().unwrap_or(0.0);
     if docstrum_conc >= DOCSTRUM_CONCENTRATION_MIN {
         axis_vote_count += 1.0;
-        let m = features.get(DOCSTRUM_MEAN_INDEX).copied().unwrap_or(0.0);
-        let doc_axis = (m + core::f64::consts::FRAC_PI_2).rem_euclid(core::f64::consts::PI);
-        if axis_err_rad(doc_axis, axis_rad) <= AXIS_AGREE_TOLERANCE_RAD {
+        if axis_err_rad(docstrum_axis, axis_rad) <= AXIS_AGREE_TOLERANCE_RAD {
             axis_agreement += 1.0;
         }
     }
@@ -345,6 +372,11 @@ pub struct ModelManifest {
     pub tau: f64,
     pub version: Option<String>,
     pub confidence_calibration: Option<Vec<f64>>,
+    /// Per-label decision thresholds for the 5 doc-trait heads, in label
+    /// order. Selected on the calibration split to maximize F1 (the rare
+    /// crumpled/shadow heads over-predict at a blanket 0.5). Defaults to 0.5
+    /// per label when absent.
+    pub label_thresholds: Option<Vec<f64>>,
     pub model: Model,
 }
 
@@ -374,6 +406,10 @@ enum ModelInput {
         /// manifests (identity calibration).
         #[serde(default)]
         confidence_calibration: Option<Vec<f64>>,
+        /// Per-label doc-trait decision thresholds (index-aligned with labels).
+        /// Absent on older manifests (0.5 per label).
+        #[serde(default)]
+        label_thresholds: Option<Vec<f64>>,
     },
     Flat(Vec<Vec<RawNode>>),
 }
@@ -480,7 +516,7 @@ impl ModelManifest {
     /// keep using `Model::from_xgboost_json(json, num_labels)` instead.
     pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
         let input: ModelInput = serde_json::from_str(json)?;
-        let (labels, tau, raw_trees, trees_per_label, version, confidence_calibration) =
+        let (labels, tau, raw_trees, trees_per_label, version, confidence_calibration, label_thresholds) =
             match input {
                 ModelInput::Manifest {
                     labels,
@@ -489,8 +525,9 @@ impl ModelManifest {
                     trees_per_label,
                     version,
                     confidence_calibration,
-                } => (labels, tau, trees, trees_per_label, version, confidence_calibration),
-                ModelInput::Flat(trees) => (Vec::new(), default_tau(), trees, None, None, None),
+                    label_thresholds,
+                } => (labels, tau, trees, trees_per_label, version, confidence_calibration, label_thresholds),
+                ModelInput::Flat(trees) => (Vec::new(), default_tau(), trees, None, None, None, None),
             };
         if labels.is_empty() {
             return Err(serde_json::Error::custom(
@@ -504,8 +541,28 @@ impl ModelManifest {
             tau,
             version,
             confidence_calibration,
+            label_thresholds,
             model,
         })
+    }
+
+    /// Binarize the 5 doc-trait heads at their per-label thresholds (default
+    /// 0.5). Returns booleans index-aligned with the first 5 labels.
+    pub fn trait_labels(&self, features: &[f64]) -> Vec<bool> {
+        let preds = self.model.predict(features);
+        preds
+            .iter()
+            .enumerate()
+            .take(5)
+            .map(|(i, &p)| {
+                let t = self
+                    .label_thresholds
+                    .as_ref()
+                    .and_then(|v| v.get(i).copied())
+                    .unwrap_or(0.5);
+                p >= t
+            })
+            .collect()
     }
 }
 
