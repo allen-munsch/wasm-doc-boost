@@ -11,7 +11,7 @@ use serde::de::Error as _;
 use serde::Deserialize;
 
 /// Per-degree rework (v3) labels: 5 doc traits + flip + trust.
-pub const LABELS_V2: [&str; 7] = [
+pub const LABELS: [&str; 7] = [
     "is_document",
     "is_digital",
     "is_paper",
@@ -793,7 +793,7 @@ mod tests {
             .expect("model_v3.json not found — run train_model_v2.py first");
         let manifest = ModelManifest::from_json(&json).expect("failed to parse model_v3.json");
 
-        assert_eq!(manifest.labels, LABELS_V2);
+        assert_eq!(manifest.labels, LABELS);
         assert!(manifest.tau.is_finite() && manifest.tau > 0.0);
         assert_eq!(
             manifest.version.as_deref(),

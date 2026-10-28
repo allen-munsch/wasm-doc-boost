@@ -67,7 +67,7 @@ pub const NOISE_SHADOW_START: usize = 55;
 /// Extract the 100 pre-rotation pixel heuristics from raw RGB bytes.
 ///
 /// Shared by `extract_all` (backward-compatible 103 = 100 + 3 zero-pad) and
-/// `extract_all_v2` (116 = 100 + 16 rotation signals for the per-degree
+/// `extract_all` (116 = 100 + 16 rotation signals for the per-degree
 /// rework).
 pub fn extract_core(pixels: &[u8], width: usize, height: usize) -> Vec<f64> {
     let gray = crate::to_grayscale(pixels, width, height);
@@ -170,30 +170,10 @@ pub fn rotation_extract(
     }
 }
 
-/// Extract all 103 pixel heuristics from raw RGB bytes.
-///
-/// Backward-compatible with the pre-rework model: 100 real features + 3
-/// zero-padded to match the dimensionality of `data/features_v3.npz`. The
-/// per-degree rework switches `py-features`/`wasm-bridge` to `extract_all_v2`.
-///
-/// This is the single canonical feature vector for the CURRENT model — both
-/// `py-features` (training export) and `wasm-bridge` (inference) delegate to
-/// this function.
-pub fn extract_all(pixels: &[u8], width: usize, height: usize) -> Vec<f64> {
-    let mut features = extract_core(pixels, width, height);
-
-    // Pad to 103 features to match data/features_v3.npz dimensionality.
-    // The 3 padding features (indices 100-102) are set to 0.0 — trees that
-    // split on them will always take the left branch, which is harmless.
-    features.extend([0.0_f64; 3]);
-
-    features
-}
-
-/// Extract the rework feature vector: 100 heuristics + 16 rotation signals.
+/// Extract the canonical 124-feature vector: 100 core heuristics + 24 rotation signals.
 ///
 /// Canonical for the per-degree model (Phase 2 export + Phase 4 WASM).
-pub fn extract_all_v2(pixels: &[u8], width: usize, height: usize) -> Vec<f64> {
+pub fn extract_all(pixels: &[u8], width: usize, height: usize) -> Vec<f64> {
     let gray = crate::to_grayscale(pixels, width, height);
     let mut features = extract_core(pixels, width, height);
     features.extend(rotation_features(&gray, pixels, width, height));
@@ -203,7 +183,7 @@ pub fn extract_all_v2(pixels: &[u8], width: usize, height: usize) -> Vec<f64> {
 /// Extract the rework feature vector plus the per-glyph flip evidence from
 /// the same winner deskew: `(features, glyph_sum_logodds, glyph_count)`.
 /// Positive glyph_sum_logodds = flipped, negative = upright.
-pub fn extract_all_v2_with_glyph(
+pub fn extract_all_with_glyph(
     pixels: &[u8],
     width: usize,
     height: usize,
@@ -213,112 +193,6 @@ pub fn extract_all_v2_with_glyph(
     let rot = rotation_extract(&gray, pixels, width, height);
     features.extend(rot.features);
     let (sum_logodds, count) = crate::glyph::glyph_logodds_from_crops(&rot.glyph_crops);
-    (features, sum_logodds, count as f64)
-}
-
-/// Box-downsample an RGB image by integer factor `k` (each channel averaged
-/// over a k×k block, rounded to nearest). Returns (pixels, new_w, new_h).
-/// Used by `extract_all_v2_scaled` and the resolution-validation harness.
-pub fn downsample_rgb(
-    pixels: &[u8],
-    width: usize,
-    height: usize,
-    k: usize,
-) -> (Vec<u8>, usize, usize) {
-    if k <= 1 {
-        return (pixels.to_vec(), width, height);
-    }
-    let nw = width / k;
-    let nh = height / k;
-    if nw == 0 || nh == 0 {
-        return (pixels.to_vec(), width, height);
-    }
-    let mut out = Vec::with_capacity(nw * nh * 3);
-    let half = ((k * k) / 2) as u32;
-    let div = (k * k) as u32;
-    for y in 0..nh {
-        for x in 0..nw {
-            let mut r = 0u32;
-            let mut g = 0u32;
-            let mut b = 0u32;
-            for dy in 0..k {
-                let row = (y * k + dy) * width;
-                for dx in 0..k {
-                    let i = (row + x * k + dx) * 3;
-                    r += pixels[i] as u32;
-                    g += pixels[i + 1] as u32;
-                    b += pixels[i + 2] as u32;
-                }
-            }
-            out.push(((r + half) / div) as u8);
-            out.push(((g + half) / div) as u8);
-            out.push(((b + half) / div) as u8);
-        }
-    }
-    (out, nw, nh)
-}
-
-/// `extract_all_v2` on a k× box-downsampled copy of the input: the entire
-/// feature pipeline (core + rotation) runs at reduced resolution. This is
-/// the sub-10ms path — measure accuracy drift before retraining on it.
-pub fn extract_all_v2_scaled(
-    pixels: &[u8],
-    width: usize,
-    height: usize,
-    k: usize,
-) -> Vec<f64> {
-    let (px, w, h) = downsample_rgb(pixels, width, height, k);
-    extract_all_v2(&px, w, h)
-}
-
-/// Hybrid-resolution extraction for the sub-10ms path:
-/// - core 100 features + radon axis + boundary + docstrum at k=4 (128px long
-///   edge): the radon axis set survives (worst 0.42 deg over real invoices),
-///   and these are aggregate statistics.
-/// - textline flip + per-glyph crops at k=2 (256px long edge): the glyph
-///   classifier needs ~256px to resolve ascender/descender shape; k=4 destroys
-///   it (17% flip accuracy vs 93% full-res), k=2 holds (91%).
-///
-/// Returns `(features, glyph_sum_logodds, glyph_count)` with the same
-/// 124-feature layout as `extract_all_v2` (so the trained GBDT can be retrained
-/// on these features unchanged).
-pub fn extract_all_v2_hybrid(
-    pixels: &[u8],
-    width: usize,
-    height: usize,
-) -> (Vec<f64>, f64, f64) {
-    let (core_px, cw, ch) = downsample_rgb(pixels, width, height, 4);
-    let (flip_px, fw, fh) = downsample_rgb(pixels, width, height, 2);
-    let core_gray = crate::to_grayscale(&core_px, cw, ch);
-    let flip_gray = crate::to_grayscale(&flip_px, fw, fh);
-
-    let mut features = extract_core(&core_px, cw, ch);
-
-    // Noise/shadow features need full resolution: k=4 averaging destroys
-    // high-frequency noise (blockiness -> 0) and shadow depth structure,
-    // which the crumpled/shadow heads rely on. Recompute them from the
-    // full-res grayscale and splice them into indices 55..=63.
-    let full_gray = crate::to_grayscale(pixels, width, height);
-    let ns = crate::extract_noise_shadow(&full_gray, width, height);
-    features[NOISE_SHADOW_START..NOISE_SHADOW_START + ns.len()].copy_from_slice(&ns);
-
-    let curve = crate::radon::radon_curve(&core_gray, cw, ch);
-    let axes = crate::radon::radon_top_axes(&curve, 4);
-    let best = crate::textline::textline_flip_best_axis_cheap(
-        &core_gray, cw, ch, &flip_gray, fw, fh, &axes,
-    );
-    let (peakiness, peak_margin, concentration) = crate::radon::radon_summary(&curve);
-
-    features.push(best.axis);
-    features.push(peakiness);
-    features.push(peak_margin);
-    features.push(concentration);
-    features.extend_from_slice(&best.features[0..6]);
-    features.extend(crate::boundary::boundary_features(&core_px, cw, ch));
-    features.extend(crate::ink::docstrum_axis(&core_gray, cw, ch));
-    features.extend_from_slice(&best.features[6..14]);
-
-    let (sum_logodds, count) = crate::glyph::glyph_logodds_from_crops(&best.glyph_crops);
     (features, sum_logodds, count as f64)
 }
 
@@ -342,8 +216,7 @@ mod tests {
     #[test]
     fn feature_count_contract() {
         let px = sample_rgb(64, 64);
-        assert_eq!(extract_all(&px, 64, 64).len(), 103);
-        assert_eq!(extract_all_v2(&px, 64, 64).len(), 124);
+        assert_eq!(extract_all(&px, 64, 64).len(), 124);
         assert_eq!(
             rotation_features(&to_grayscale(&px, 64, 64), &px, 64, 64).len(),
             24

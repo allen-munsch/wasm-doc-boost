@@ -44,13 +44,13 @@ mod engines;
 use std::sync::Mutex;
 
 use gbdt_core::{
-    combine_rotation_calibrated, GlyphEvidence, ModelManifest, DEFAULT_TAU, LABELS_V2,
+    combine_rotation_calibrated, GlyphEvidence, ModelManifest, DEFAULT_TAU, LABELS,
 };
 use pdf_inspector_core::{types::ItemType, PdfType};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
-static MODEL_V2: Mutex<Option<ModelManifest>> = Mutex::new(None);
+static MODEL: Mutex<Option<ModelManifest>> = Mutex::new(None);
 
 // ── extract_all ──────────────────────────────────────────────────────────
 
@@ -111,59 +111,6 @@ fn extract_all(pixels: Vec<u8>, width: usize, height: usize) -> PyResult<Vec<f64
     Ok(features_core::extract_all(&pixels, width, height))
 }
 
-/// Extract the per-degree rework feature vector: 116 heuristics
-/// (100 pre-rotation + 16 rotation signals: radon, textline flip, boundary
-/// min-area-rect, unfolded docstrum).
-///
-/// * pixels: `bytes` — RGB bytes (length must equal width × height × 3)
-/// * width: `int`
-/// * height: `int`
-/// * Returns: `list[float]` (length 116)
-#[pyfunction]
-fn extract_all_v2(pixels: Vec<u8>, width: usize, height: usize) -> PyResult<Vec<f64>> {
-    let expected = width * height * 3;
-    if pixels.len() != expected {
-        return Err(pyo3::exceptions::PyValueError::new_err(format!(
-            "Expected {} bytes ({}x{}x3), got {}",
-            expected,
-            width,
-            height,
-            pixels.len()
-        )));
-    }
-
-    Ok(features_core::extract_all_v2(&pixels, width, height))
-}
-
-/// Hybrid-resolution extraction for the sub-10ms path: core 100 features +
-/// radon axis + boundary + docstrum at k=4, textline flip + per-glyph crops
-/// at k=2. Same 124-feature layout as `extract_all_v2` (retrain on it).
-///
-/// * pixels: `bytes` — RGB bytes (length must equal width × height × 3)
-/// * width: `int`
-/// * height: `int`
-/// * Returns: `(list[float], float, float)` — (124 features,
-///   glyph_sum_logodds, glyph_count).
-#[pyfunction]
-fn extract_all_v2_hybrid(
-    pixels: Vec<u8>,
-    width: usize,
-    height: usize,
-) -> PyResult<(Vec<f64>, f64, f64)> {
-    let expected = width * height * 3;
-    if pixels.len() != expected {
-        return Err(pyo3::exceptions::PyValueError::new_err(format!(
-            "Expected {} bytes ({}x{}x3), got {}",
-            expected,
-            width,
-            height,
-            pixels.len()
-        )));
-    }
-
-    Ok(features_core::extract_all_v2_hybrid(&pixels, width, height))
-}
-
 /// Extract per-glyph 20x20 ink-density crops from the best-axis deskew.
 /// Training input for scripts/train_glyph_classifier.py: call on an upright
 /// image for label 0 and on its 180-rotated RGB for label 1.
@@ -218,7 +165,7 @@ fn extract_glyph_logodds(pixels: Vec<u8>, width: usize, height: usize) -> PyResu
 /// Returns 60 radon-curve bins, then for each of the top-4 local maxima
 /// (highest first, parabolic-refined): [axis_rad, n_lines, total_line_ink].
 /// Used to validate the multi-candidate axis selection before wiring it into
-/// `extract_all_v2`.
+/// `extract_all`.
 #[pyfunction]
 fn rotation_diagnostic(pixels: Vec<u8>, width: usize, height: usize) -> PyResult<Vec<f64>> {
     let expected = width * height * 3;
@@ -419,38 +366,26 @@ fn is_release_build() -> bool {
 // ── v3 GBDT model loading + prediction ───────────────────────────────────
 
 /// Load the v3 model manifest `{labels, tau, version, trees, trees_per_label}` —
-/// the exact same JSON the frontend passes to `load_model_v2`.
+/// the exact same JSON the frontend passes to `load_model`.
 #[pyfunction]
-fn load_model_v2(json: &str) -> PyResult<()> {
+fn load_model(json: &str) -> PyResult<()> {
     let manifest = ModelManifest::from_json(json)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-    if manifest.labels.len() != LABELS_V2.len() {
+    if manifest.labels.len() != LABELS.len() {
         return Err(pyo3::exceptions::PyValueError::new_err(format!(
             "manifest must have {} labels, got {}: {:?}",
-            LABELS_V2.len(),
+            LABELS.len(),
             manifest.labels.len(),
             manifest.labels
         )));
     }
-    *MODEL_V2.lock().unwrap() = Some(manifest);
+    *MODEL.lock().unwrap() = Some(manifest);
     Ok(())
-}
-
-/// Release-tag version of the loaded model (empty string when unset or not
-/// loaded). Matches the tag the model.json was built for, e.g. "0.4.0".
-#[pyfunction]
-fn model_version() -> String {
-    MODEL_V2
-        .lock()
-        .unwrap()
-        .as_ref()
-        .and_then(|m| m.version.clone())
-        .unwrap_or_default()
 }
 
 /// Score the 7 heads on raw RGB pixels and combine the deterministic radon
 /// Resize raw RGB pixels to a `max_edge` long edge with the same Triangle
-/// filter `classify_file_v2` uses, so `predict_v2` and the browser twin see
+/// filter `classify_file` uses, so `predict` and the browser twin see
 /// identical inputs. The GBDT + isotonic trust calibration are trained on
 /// 512-long-edge features; native-resolution input is out-of-distribution
 /// and miscalibrates `rotation_confidence` (90°/270° pages read as upright
@@ -476,7 +411,7 @@ fn resize_rgb_max_edge(
 }
 
 /// axis with the flip/trust heads. Backend twin of the frontend's
-/// `classify_file_v2`: same features-core extraction, same gbdt-core forest.
+/// `classify_file`: same features-core extraction, same gbdt-core forest.
 ///
 /// * pixels: `bytes` — RGB bytes (length must equal width × height × 3)
 /// * width: `int`
@@ -484,7 +419,7 @@ fn resize_rgb_max_edge(
 /// * Returns: `dict` with the 7 label probabilities plus `rotation_deg`,
 ///   `rotation_confidence`, `needs_review`.
 #[pyfunction]
-fn predict_v2(pixels: Vec<u8>, width: usize, height: usize) -> PyResult<Py<PyAny>> {
+fn predict(pixels: Vec<u8>, width: usize, height: usize) -> PyResult<Py<PyAny>> {
     let expected = width * height * 3;
     if pixels.len() != expected {
         return Err(pyo3::exceptions::PyValueError::new_err(format!(
@@ -496,20 +431,20 @@ fn predict_v2(pixels: Vec<u8>, width: usize, height: usize) -> PyResult<Py<PyAny
         )));
     }
 
-    // Twin parity with classify_file_v2: resize to the 512-long-edge input
+    // Twin parity with classify_file: resize to the 512-long-edge input
     // the model was trained on. Native-resolution input otherwise produces
     // out-of-distribution features and a miscalibrated rotation_confidence.
     let (pixels, width, height) = resize_rgb_max_edge(&pixels, width, height, 512);
 
     let manifest = {
-        let guard = MODEL_V2.lock().unwrap();
+        let guard = MODEL.lock().unwrap();
         guard.as_ref().cloned().ok_or_else(|| {
-            pyo3::exceptions::PyRuntimeError::new_err("model not loaded — call load_model_v2 first")
+            pyo3::exceptions::PyRuntimeError::new_err("model not loaded — call load_model first")
         })?
     };
 
     let (features, glyph_logodds, glyph_count) =
-        features_core::extract_all_v2_hybrid(&pixels, width, height);
+        features_core::extract_all_with_glyph(&pixels, width, height);
     let preds = manifest.model.predict(&features);
     let tau = if manifest.tau.is_finite() && manifest.tau > 0.0 {
         manifest.tau
@@ -547,7 +482,7 @@ fn predict_v2(pixels: Vec<u8>, width: usize, height: usize) -> PyResult<Py<PyAny
 
 /// Expose the raw combine step for diagnostics and parity checks.
 #[pyfunction]
-fn combine_rotation_v2(features: Vec<f64>, preds: Vec<f64>, tau: f64) -> PyResult<Py<PyAny>> {
+fn combine_rotation(features: Vec<f64>, preds: Vec<f64>, tau: f64) -> PyResult<Py<PyAny>> {
     let d = combine_rotation_calibrated(&features, &preds, tau, None, None);
     Python::attach(|py| {
         let dict = PyDict::new(py);
@@ -569,17 +504,15 @@ fn combine_rotation_v2(features: Vec<f64>, preds: Vec<f64>, tau: f64) -> PyResul
 /// ```python
 /// import py_features
 ///
-/// feats = py_features.extract_all_v2(raw_rgb_bytes, width, height)
-/// py_features.load_model_v2(open("model.json").read())
-/// result = py_features.predict_v2(raw_rgb_bytes, width, height)
+/// feats = py_features.extract_all(raw_rgb_bytes, width, height)
+/// py_features.load_model(open("model.json").read())
+/// result = py_features.predict(raw_rgb_bytes, width, height)
 /// pdf = py_features.classify_pdf(pdf_bytes)
 /// hits = py_features.scan_pii(text)
 /// ```
 #[pymodule]
 fn py_features(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(extract_all, m)?)?;
-    m.add_function(wrap_pyfunction!(extract_all_v2, m)?)?;
-    m.add_function(wrap_pyfunction!(extract_all_v2_hybrid, m)?)?;
     m.add_function(wrap_pyfunction!(extract_glyph_crops, m)?)?;
     m.add_function(wrap_pyfunction!(extract_glyph_logodds, m)?)?;
     m.add_function(wrap_pyfunction!(load_rgb_resized, m)?)?;
@@ -588,10 +521,9 @@ fn py_features(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(extract_text_with_positions, m)?)?;
     m.add_function(wrap_pyfunction!(scan_pii, m)?)?;
     m.add_function(wrap_pyfunction!(is_release_build, m)?)?;
-    m.add_function(wrap_pyfunction!(load_model_v2, m)?)?;
-    m.add_function(wrap_pyfunction!(model_version, m)?)?;
-    m.add_function(wrap_pyfunction!(predict_v2, m)?)?;
-    m.add_function(wrap_pyfunction!(combine_rotation_v2, m)?)?;
+    m.add_function(wrap_pyfunction!(load_model, m)?)?;
+    m.add_function(wrap_pyfunction!(predict, m)?)?;
+    m.add_function(wrap_pyfunction!(combine_rotation, m)?)?;
     m.add_class::<engines::LayoutEngine>()?;
     m.add_class::<engines::OcrEngine>()?;
     m.add_class::<engines::PiiEngine>()?;

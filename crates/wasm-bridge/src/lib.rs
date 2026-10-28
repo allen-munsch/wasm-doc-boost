@@ -3,36 +3,14 @@ use std::sync::Mutex;
 use wasm_bindgen::prelude::*;
 
 use gbdt_core::{
-    combine_rotation_calibrated, GlyphEvidence, Model, ModelManifest, DEFAULT_TAU, LABELS_V2,
+    combine_rotation_calibrated, GlyphEvidence, ModelManifest, DEFAULT_TAU, LABELS,
 };
 #[cfg(test)]
 use gbdt_core::combine_rotation;
 
 mod pdf;
 
-static MODEL: Mutex<Option<Model>> = Mutex::new(None);
-
-const LABELS: [&str; 9] = [
-    "is_document",
-    "is_digital",
-    "is_paper",
-    "is_crumpled",
-    "is_shadow",
-    "rotation_0",
-    "rotation_90",
-    "rotation_180",
-    "rotation_270",
-];
-
-static MODEL_V2: Mutex<Option<ModelManifest>> = Mutex::new(None);
-
-#[wasm_bindgen]
-pub fn load_model(json: &str) -> Result<(), JsValue> {
-    let model = Model::from_xgboost_json(json, 9).map_err(|e| JsValue::from_str(&e.to_string()))?;
-    let mut guard = MODEL.lock().unwrap();
-    *guard = Some(model);
-    Ok(())
-}
+static MODEL: Mutex<Option<ModelManifest>> = Mutex::new(None);
 
 /// Load the per-degree rework model manifest (v3; format-compatible with v2).
 ///
@@ -40,31 +18,19 @@ pub fn load_model(json: &str) -> Result<(), JsValue> {
 /// `train_model_v2.py`. Also accepts a legacy flat tree array for
 /// compatibility, but then the 7-label count and the default tau apply.
 #[wasm_bindgen]
-pub fn load_model_v2(json: &str) -> Result<(), JsValue> {
+pub fn load_model(json: &str) -> Result<(), JsValue> {
     let manifest = ModelManifest::from_json(json).map_err(|e| JsValue::from_str(&e.to_string()))?;
-    if manifest.labels.len() != LABELS_V2.len() {
+    if manifest.labels.len() != LABELS.len() {
         return Err(JsValue::from_str(&format!(
             "manifest must have {} labels, got {}: {:?}",
-            LABELS_V2.len(),
+            LABELS.len(),
             manifest.labels.len(),
             manifest.labels
         )));
     }
-    let mut guard = MODEL_V2.lock().unwrap();
+    let mut guard = MODEL.lock().unwrap();
     *guard = Some(manifest);
     Ok(())
-}
-
-/// Release-tag version of the loaded model (empty string when unset or not
-/// loaded). Matches the tag the model.json was built for, e.g. "0.4.0".
-#[wasm_bindgen]
-pub fn model_version() -> String {
-    MODEL_V2
-        .lock()
-        .unwrap()
-        .as_ref()
-        .and_then(|m| m.version.clone())
-        .unwrap_or_default()
 }
 
 /// Scan text for PII/PCI (credit card numbers, SSNs, emails, phones).
@@ -227,44 +193,14 @@ fn resize_max_edge(img: image::DynamicImage, max_edge: u32) -> image::DynamicIma
     img.resize_exact(new_w, new_h, image::imageops::FilterType::Triangle)
 }
 
-fn extract_all(pixels: &[u8], width: usize, height: usize) -> Vec<f64> {
-    features_core::extract_all(pixels, width, height)
-}
-
+/// Per-degree rotation classification: 5 doc traits + flip + trust +
+/// deterministic `rotation_deg`, `rotation_confidence`, `needs_review`.
 #[wasm_bindgen]
 pub fn classify_file(bytes: &[u8]) -> Result<JsValue, JsValue> {
     let guard = MODEL.lock().unwrap();
-    let model = guard
-        .as_ref()
-        .ok_or_else(|| JsValue::from_str("Model not loaded — call load_model first"))?;
-
-    let img = image::load_from_memory(bytes)
-        .map_err(|e| JsValue::from_str(&format!("Image decode error: {e}")))?;
-
-    let img = resize_max_edge(img, 512);
-    let rgb = img.to_rgb8();
-    let (width, height) = rgb.dimensions();
-    let pixels = rgb.into_raw();
-
-    let features = extract_all(&pixels, width as usize, height as usize);
-    let preds = model.predict(&features);
-
-    let result = js_sys::Object::new();
-    for (label, &pred) in LABELS.iter().zip(preds.iter()) {
-        js_sys::Reflect::set(&result, &JsValue::from_str(label), &JsValue::from_f64(pred)).unwrap();
-    }
-
-    Ok(result.into())
-}
-
-/// Per-degree rotation classification (v2): 5 doc traits + flip + trust +
-/// deterministic `rotation_deg`, `rotation_confidence`, `needs_review`.
-#[wasm_bindgen]
-pub fn classify_file_v2(bytes: &[u8]) -> Result<JsValue, JsValue> {
-    let guard = MODEL_V2.lock().unwrap();
     let manifest = guard
         .as_ref()
-        .ok_or_else(|| JsValue::from_str("Model not loaded — call load_model_v2 first"))?;
+        .ok_or_else(|| JsValue::from_str("Model not loaded — call load_model first"))?;
     let tau = if manifest.tau.is_finite() && manifest.tau > 0.0 {
         manifest.tau
     } else {
@@ -281,7 +217,7 @@ pub fn classify_file_v2(bytes: &[u8]) -> Result<JsValue, JsValue> {
     let pixels = rgb.into_raw();
 
     let (features, glyph_logodds, glyph_count) =
-        features_core::extract_all_v2_hybrid(&pixels, width as usize, height as usize);
+        features_core::extract_all_with_glyph(&pixels, width as usize, height as usize);
     let preds = model.predict(&features);
     let d = combine_rotation_calibrated(
         &features,
@@ -448,20 +384,6 @@ mod tests {
     use gbdt_core::RADON_AXIS_INDEX;
     use wasm_bindgen_test::*;
 
-    /// Trivial 9-label model: one tree per label, each always returning leaf 0.0
-    /// → sigmoid(0.0) = 0.5 for every label.
-    const TRIVIAL_MODEL_JSON: &str = r#"[
-        [{"nodeid": 0, "depth": 0, "leaf": 0.0}],
-        [{"nodeid": 0, "depth": 0, "leaf": 0.0}],
-        [{"nodeid": 0, "depth": 0, "leaf": 0.0}],
-        [{"nodeid": 0, "depth": 0, "leaf": 0.0}],
-        [{"nodeid": 0, "depth": 0, "leaf": 0.0}],
-        [{"nodeid": 0, "depth": 0, "leaf": 0.0}],
-        [{"nodeid": 0, "depth": 0, "leaf": 0.0}],
-        [{"nodeid": 0, "depth": 0, "leaf": 0.0}],
-        [{"nodeid": 0, "depth": 0, "leaf": 0.0}]
-    ]"#;
-
     fn create_test_image() -> Vec<u8> {
         let mut img = image::RgbImage::new(64, 64);
         for (x, y, pixel) in img.enumerate_pixels_mut() {
@@ -473,51 +395,6 @@ mod tests {
         let mut buf = std::io::Cursor::new(Vec::new());
         img.write_to(&mut buf, image::ImageFormat::Png).unwrap();
         buf.into_inner()
-    }
-
-    #[wasm_bindgen_test]
-    fn test_classify_file_returns_nine_labels() {
-        load_model(TRIVIAL_MODEL_JSON).unwrap();
-
-        let png_bytes = create_test_image();
-        let result = classify_file(&png_bytes).unwrap();
-
-        let labels = [
-            "is_document",
-            "is_digital",
-            "is_paper",
-            "is_crumpled",
-            "is_shadow",
-            "rotation_0",
-            "rotation_90",
-            "rotation_180",
-            "rotation_270",
-        ];
-        for label in &labels {
-            let val = js_sys::Reflect::get(&result, &JsValue::from_str(label))
-                .unwrap()
-                .as_f64()
-                .unwrap();
-            assert!(
-                (val - 0.5).abs() < 0.01,
-                "{}: expected ~0.5, got {}",
-                label,
-                val
-            );
-        }
-    }
-
-    #[wasm_bindgen_test]
-    fn test_classify_file_no_model_errors() {
-        // Reset model
-        {
-            let mut guard = MODEL.lock().unwrap();
-            *guard = None;
-        }
-        let png_bytes = create_test_image();
-        let err = classify_file(&png_bytes).unwrap_err();
-        let msg = err.as_string().unwrap();
-        assert!(msg.contains("Model not loaded"), "got: {msg}");
     }
 
     #[wasm_bindgen_test]
@@ -536,34 +413,10 @@ mod tests {
         assert_eq!(resized.height(), 100);
     }
 
-    #[wasm_bindgen_test]
-    fn test_feature_count() {
-        let pixels = vec![128u8; 64 * 64 * 3];
-        let feats = extract_all(&pixels, 64, 64);
-        assert_eq!(
-            feats.len(),
-            103,
-            "expected 103 features, got {}",
-            feats.len()
-        );
-    }
-
     #[test]
-    fn test_feature_count_native() {
+    fn test_extract_all_feature_count_native() {
         let pixels = vec![128u8; 64 * 64 * 3];
-        let feats = extract_all(&pixels, 64, 64);
-        assert_eq!(
-            feats.len(),
-            103,
-            "expected 103 features, got {}",
-            feats.len()
-        );
-    }
-
-    #[test]
-    fn test_extract_all_v2_feature_count_native() {
-        let pixels = vec![128u8; 64 * 64 * 3];
-        let feats = features_core::extract_all_v2(&pixels, 64, 64);
+        let feats = features_core::extract_all(&pixels, 64, 64);
         assert_eq!(
             feats.len(),
             124,
@@ -603,7 +456,7 @@ mod tests {
         assert!((d.rotation_deg - 0.0).abs() < 1e-9, "deg={}", d.rotation_deg);
     }
 
-    const TRIVIAL_MANIFEST_V2: &str = r#"{
+    const TRIVIAL_MANIFEST: &str = r#"{
         "labels": ["is_document","is_digital","is_paper","is_crumpled","is_shadow","flip","trust"],
         "tau": 0.9,
         "trees": [
@@ -618,10 +471,10 @@ mod tests {
     }"#;
 
     #[wasm_bindgen_test]
-    fn test_classify_file_v2_returns_v2_shape() {
-        load_model_v2(TRIVIAL_MANIFEST_V2).unwrap();
+    fn test_classify_file_returns_v2_shape() {
+        load_model(TRIVIAL_MANIFEST).unwrap();
         let png_bytes = create_test_image();
-        let result = classify_file_v2(&png_bytes).unwrap();
+        let result = classify_file(&png_bytes).unwrap();
 
         let labels = [
             "is_document",
