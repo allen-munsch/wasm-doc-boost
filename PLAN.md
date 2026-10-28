@@ -230,7 +230,7 @@ Phase 6 — release: wasm-pack build, eval_wasm/eval_pdf/bench_sobel, README
 
 ## v0.4.0 user-testing feedback (next direction, recorded 2025-11-25)
 
-Queue AFTER the sub-10ms optimization pass (currently in flight).
+Queued after the sub-10ms pass, which shipped in v0.5.0 as accuracy-first (30ms budget, 27.9ms measured). Item 2 below is fixed in v0.5.0 (f61/f62 masked from is_digital); item 1 (rename) remains open.
 
 1. **Rename the `_v2` naming mess.** `extract_all_v2`, `extract_all_v2_hybrid`,
    `extract_all_v2_with_glyph`, `extract_all_v2_scaled`, `process_one_v2`,
