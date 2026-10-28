@@ -232,7 +232,10 @@ pub fn combine_rotation_calibrated(
     }
 
     let mut axis_deg = axis_rad.to_degrees().rem_euclid(180.0);
-    if axis_deg < 1.0 || axis_deg > 179.0 {
+    // Fold-snap: the mod-180 axis is blind to the 0/180 fold, so snap only the
+    // genuinely ambiguous sub-quarter-degree band. With the S2 fine axis, a
+    // real 0.5-1.0 deg tilt must survive (the old 1.0 deg band erased it).
+    if axis_deg < 0.25 || axis_deg > 179.75 {
         axis_deg = 0.0;
     }
     let flip_p = preds[5];
@@ -246,16 +249,14 @@ pub fn combine_rotation_calibrated(
     // Both gates derive confidence from evidence strength, never a constant
     // 1.0, so weak evidence lowers confidence and needs_review fires instead
     // of reporting a confident wrong answer.
-    let cardinal = axis_deg == 0.0 || (axis_deg - 90.0).abs() < 1.0;
-    let glyph_gate_active = cardinal && matches!(glyph, Some(ev) if ev.count >= GLYPH_COUNT_MIN);
-    let (flip, flip_conf) = if cardinal {
-        match glyph {
-            Some(ev) if ev.count >= GLYPH_COUNT_MIN => glyph_flip_gate(&ev),
-            _ => vote_flip_gate(features, flip_p),
-        }
-    } else {
-        let f = if flip_p >= 0.5 { 1.0 } else { 0.0 };
-        (f, flip_p.max(1.0 - flip_p))
+    // S4: S3 deskews the mask at the refined fine axis for ANY tilt, so the
+    // deterministic glyph/line-vote gates (previously cardinal-only) apply
+    // everywhere; the GBDT flip head is the tie-band fallback and the
+    // disagreement cross-check below, never the primary off-cardinal signal.
+    let glyph_gate_active = matches!(glyph, Some(ev) if ev.count >= GLYPH_COUNT_MIN);
+    let (flip, flip_conf) = match glyph {
+        Some(ev) if ev.count >= GLYPH_COUNT_MIN => glyph_flip_gate(&ev),
+        _ => vote_flip_gate(features, flip_p),
     };
 
     let rotation_deg = (180.0 - axis_deg).rem_euclid(180.0) + 180.0 * flip;
