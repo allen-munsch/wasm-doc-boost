@@ -449,6 +449,32 @@ fn model_version() -> String {
 }
 
 /// Score the 7 heads on raw RGB pixels and combine the deterministic radon
+/// Resize raw RGB pixels to a `max_edge` long edge with the same Triangle
+/// filter `classify_file_v2` uses, so `predict_v2` and the browser twin see
+/// identical inputs. The GBDT + isotonic trust calibration are trained on
+/// 512-long-edge features; native-resolution input is out-of-distribution
+/// and miscalibrates `rotation_confidence` (90°/270° pages read as upright
+/// at ~0.94 confidence). Idempotent for inputs already <= max_edge.
+fn resize_rgb_max_edge(
+    pixels: &[u8],
+    width: usize,
+    height: usize,
+    max_edge: u32,
+) -> (Vec<u8>, usize, usize) {
+    let longest = width.max(height) as u32;
+    if longest <= max_edge {
+        return (pixels.to_vec(), width, height);
+    }
+    let img = image::RgbImage::from_raw(width as u32, height as u32, pixels.to_vec())
+        .expect("valid rgb buffer");
+    let ratio = max_edge as f64 / longest as f64;
+    let new_w = (width as f64 * ratio).round().max(1.0) as u32;
+    let new_h = (height as f64 * ratio).round().max(1.0) as u32;
+    let resized = image::imageops::resize(&img, new_w, new_h, image::imageops::FilterType::Triangle);
+    let (w, h) = resized.dimensions();
+    (resized.into_raw(), w as usize, h as usize)
+}
+
 /// axis with the flip/trust heads. Backend twin of the frontend's
 /// `classify_file_v2`: same features-core extraction, same gbdt-core forest.
 ///
@@ -469,6 +495,11 @@ fn predict_v2(pixels: Vec<u8>, width: usize, height: usize) -> PyResult<Py<PyAny
             pixels.len()
         )));
     }
+
+    // Twin parity with classify_file_v2: resize to the 512-long-edge input
+    // the model was trained on. Native-resolution input otherwise produces
+    // out-of-distribution features and a miscalibrated rotation_confidence.
+    let (pixels, width, height) = resize_rgb_max_edge(&pixels, width, height, 512);
 
     let manifest = {
         let guard = MODEL_V2.lock().unwrap();
