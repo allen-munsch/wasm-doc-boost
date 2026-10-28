@@ -101,6 +101,15 @@ pub struct RotationDecision {
     pub rotation_deg: f64,
     pub confidence: f64,
     pub needs_review: bool,
+    /// Quarter-turn decision (0/90/180/270), the nearest multiple of 90.
+    pub quarter: f64,
+    /// Signed fine residual `rotation_deg - quarter` in (-45, 45]. Not
+    /// snapped: a real 0.5-1.0 deg tilt survives the fold-snap.
+    pub skew_deg: f64,
+    /// The axis (fine angle) is trustworthy even if the flip bit is not.
+    pub axis_ok: bool,
+    /// The 0-vs-180 bit is trustworthy.
+    pub flip_ok: bool,
     pub flip_vote_count: f64,
     pub flip_vote_agreement: f64,
     pub axis_vote_count: f64,
@@ -305,10 +314,23 @@ pub fn combine_rotation_calibrated(
         None => (0.0, 0.0),
     };
 
+    // S5: split the decision for callers that want to run their own deskew.
+    // `quarter` is the nearest multiple of 90; `skew_deg` is the signed fine
+    // residual in (-45, 45]. `axis_ok`/`flip_ok` split the uncertainty so an
+    // uncertain flip does not discard a precise axis.
+    let quarter = ((rotation_deg / 90.0).round() * 90.0) % 360.0;
+    let skew_deg = rotation_deg - quarter;
+    let flip_ok = flip_conf >= tau && !glyph_gbdt_disagrees;
+    let axis_ok = trust_p >= tau;
+
     RotationDecision {
         rotation_deg,
         confidence,
         needs_review,
+        quarter,
+        skew_deg,
+        axis_ok,
+        flip_ok,
         flip_vote_count,
         flip_vote_agreement,
         axis_vote_count,

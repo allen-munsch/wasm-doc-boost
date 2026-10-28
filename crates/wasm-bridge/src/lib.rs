@@ -280,6 +280,26 @@ pub fn classify_file(bytes: &[u8]) -> Result<JsValue, JsValue> {
     )?;
     js_sys::Reflect::set(
         &result,
+        &JsValue::from_str("quarter"),
+        &JsValue::from_f64(d.quarter),
+    )?;
+    js_sys::Reflect::set(
+        &result,
+        &JsValue::from_str("skew_deg"),
+        &JsValue::from_f64(d.skew_deg),
+    )?;
+    js_sys::Reflect::set(
+        &result,
+        &JsValue::from_str("axis_ok"),
+        &JsValue::from_bool(d.axis_ok),
+    )?;
+    js_sys::Reflect::set(
+        &result,
+        &JsValue::from_str("flip_ok"),
+        &JsValue::from_bool(d.flip_ok),
+    )?;
+    js_sys::Reflect::set(
+        &result,
         &JsValue::from_str("flip_vote_count"),
         &JsValue::from_f64(d.flip_vote_count),
     )?;

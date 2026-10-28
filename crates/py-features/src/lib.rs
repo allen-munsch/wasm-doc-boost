@@ -470,12 +470,32 @@ fn predict(pixels: Vec<u8>, width: usize, height: usize) -> PyResult<Py<PyAny>> 
         dict.set_item("rotation_deg", d.rotation_deg)?;
         dict.set_item("rotation_confidence", d.confidence)?;
         dict.set_item("needs_review", d.needs_review)?;
+        dict.set_item("quarter", d.quarter)?;
+        dict.set_item("skew_deg", d.skew_deg)?;
+        dict.set_item("axis_ok", d.axis_ok)?;
+        dict.set_item("flip_ok", d.flip_ok)?;
         dict.set_item("flip_vote_count", d.flip_vote_count)?;
         dict.set_item("flip_vote_agreement", d.flip_vote_agreement)?;
         dict.set_item("axis_vote_count", d.axis_vote_count)?;
         dict.set_item("axis_agreement", d.axis_agreement)?;
         dict.set_item("glyph_count", d.glyph_count)?;
         dict.set_item("glyph_logodds", d.glyph_logodds)?;
+        // #6: binarized trait decisions at shipped thresholds + the ±0.08
+        // near-boundary band, matching classify_file's trait_labels output.
+        let trait_labels = PyDict::new(py);
+        let trait_uncertain = PyDict::new(py);
+        for i in 0..5 {
+            let p = preds[i];
+            let t = manifest
+                .label_thresholds
+                .as_ref()
+                .and_then(|v| v.get(i).copied())
+                .unwrap_or(0.5);
+            trait_labels.set_item(manifest.labels[i].as_str(), p >= t)?;
+            trait_uncertain.set_item(manifest.labels[i].as_str(), (p - t).abs() <= 0.08)?;
+        }
+        dict.set_item("trait_labels", trait_labels)?;
+        dict.set_item("trait_uncertain", trait_uncertain)?;
         Ok(dict.unbind().into_any())
     })
 }
