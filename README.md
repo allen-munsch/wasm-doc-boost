@@ -6,7 +6,7 @@ Client-side document intelligence via Rust → WASM: GBDT classification, per-de
 ![Features](https://img.shields.io/badge/features-124-blue)
 ![Trees](https://img.shields.io/badge/trees-1%2C080-blue)
 ![Version](https://img.shields.io/badge/version-0.5.0-green)
-![Rotation](https://img.shields.io/badge/rotation-1200%2F1200%20cardinal-brightgreen)
+![Rotation](https://img.shields.io/badge/rotation-0%20accepted%20flips-brightgreen)
 
 ## Why This Exists
 
@@ -260,7 +260,7 @@ Training: 440,592 samples (27,537 images × 16 rotations: the 4 cardinals + 6 se
 
 **Headline results, measured on the shipped WASM build:**
 
-- **Per-degree rotation on clean born-digital documents (FATURA2 gold upright)**: axis-only 100%, ±1° 98%, with every 180°-flip error routed to `needs_review` (28.1% review rate) — the accepted 71.9% has 0 flips and 0.0° circular MAE; cardinal recovery (deterministic axis) remains 1,200/1,200.
+- **Per-degree rotation on clean born-digital documents (FATURA2 gold upright)**: axis-only 100%, ±1° 98%, with every 180°-flip error routed to `needs_review` (28.1% review rate) — the accepted 71.9% has 0 flips and 0.0° circular MAE; across all four cardinals (4,000 rotated copies) 0 accepted flips and 99.5% of accepted within ±1°.
 - **Near-perfect document/digital separation**: `is_document` AUC 0.9998, `is_digital` AUC 1.0000.
 - **Sub-millisecond GBDT scoring** from a 4.5 MB WASM + 3.0 MB model download (2.0 MB + 364 KB gzip).
 
@@ -299,13 +299,16 @@ Rotation is no longer four one-hot labels. It is a per-degree estimate in [0, 36
 | accepted 180°-flip errors | 0% |
 | accepted circular MAE | 0.0° |
 
-**Measured on the real WASM at v0.4.0, rotated copies (300 held-out fatura2 test images × 4 cardinals = 1,200) — the axis is deterministic, so these carry forward to v0.5.0:**
+**Measured on the shipped WASM at v0.5.0, rotated copies (1,000 gold fatura2 test images × 4 cardinals = 4,000, py-features twin of the wasm):**
 
-| Metric | Value |
-|---|---|
-| axis (mod 180) exact | 1200 / 1200 |
-| rotation_deg exact recovery | 1200 / 1200 |
-| 0° / 90° / 180° / 270° exact | 300/300 each |
+| Cardinal | within ±1° (all) | 180°-flip errors | needs_review |
+|---|---|---|---|
+| 0° | 980 / 1000 | 20 (2%) | 28% |
+| 90° | 804 / 1000 | 177 (18%) | 49% |
+| 180° | 757 / 1000 | 243 (24%) | 61% |
+| 270° | 706 / 1000 | 263 (26%) | 70% |
+
+Every 180°-flip error is routed to `needs_review` — **0 accepted flips** across all 4,000 — and among the accepted (48%) the within-±1° rate is 99.5%. The axis is deterministic; the 90°/180°/270° shortfall is the flip gate (0-vs-180 and 90-vs-270) being deliberately conservative rather than confidently wrong.
 
 The 0 flip errors on born-digital invoices come from the deterministic flip gate, not a better flip head. At a cardinal axis the line-vote gate (or the per-glyph shape gate when ≥8 glyphs voted) overrides the GBDT flip head; the GBDT head alone is still ~76% accurate and is used off-cardinal. The per-glyph gate is the fix for the v0.3.0 gap: it works on all-caps/digit invoices where ascender/descender ink mass is ~0, so vote_frac was a coin flip there. When the glyph gate and the GBDT flip head disagree, the answer routes to `needs_review` rather than trusting the weaker per-glyph signal alone.
 
