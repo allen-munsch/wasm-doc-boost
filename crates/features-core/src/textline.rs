@@ -417,6 +417,39 @@ fn cheap_line_quality(
     (n, ink)
 }
 
+/// Flip analysis at a SPECIFIC axis (S3): one deskew at the refined fine-axis
+/// value, then the 14 flip features + per-glyph crops from that single deskew.
+///
+/// The fine stage S2 refines the coarse radon axis to ~0.1 deg; running the
+/// flip evidence on that straightened mask (instead of the 3-deg coarse axis)
+/// keeps ascender/descender shape sharp so the glyph/line-vote gate works at
+/// any tilt, not just the cardinals.
+pub fn textline_flip_at_axis(
+    gray: &[f64],
+    width: usize,
+    height: usize,
+    axis_rad: f64,
+) -> BestAxisFlip {
+    if width == 0 || height == 0 {
+        return BestAxisFlip {
+            axis: axis_rad,
+            features: alloc::vec![0.0; 14],
+            glyph_crops: Vec::new(),
+            glyph_count: 0,
+        };
+    }
+    let d = deskew_analyze(gray, width, height, axis_rad);
+    let features = flip_features_from_lines(&d);
+    let glyph_crops = crate::glyph::glyph_crops_from_mask(&d.mask, d.size, &d.bands);
+    let glyph_count = glyph_crops.len() / crate::glyph::GLYPH_DIM;
+    BestAxisFlip {
+        axis: axis_rad,
+        features,
+        glyph_crops,
+        glyph_count,
+    }
+}
+
 /// Best-axis selection with CHEAP candidate scoring (NN + Otsu at the caller's
 /// chosen low resolution) and the full bilinear+Sauvola flip analysis only on
 /// the winner. `core_gray` is the low-res image for scoring; `gray` is the

@@ -284,6 +284,68 @@ pub fn radon_summary(curve: &[f64]) -> (f64, f64, f64) {
 /// - concentration: circular concentration of the curve treated as a
 ///   distribution over [0, pi) (double-angle), in [0, 1].
 ///
+/// Fine-stage step and half-window for the multistage deskew (S2). The
+/// coarse 60-bin radon resolves the axis to ~3 deg; a deskew step wants
+/// ~0.1 deg, so re-measure the projection variance of an Otsu ink mask at
+/// these fine steps around the coarse axis (21 evaluations).
+pub const FINE_STEP_DEG: f64 = 0.15;
+pub const FINE_HALF_WINDOW_DEG: f64 = 1.5;
+
+/// Fine axis refinement (S2): Otsu ink mask + projection-variance search.
+///
+/// Builds a binary ink mask (below-Otsu = ink, matching `deskew.py`) and
+/// re-measures the horizontal-projection variance of that mask at
+/// `FINE_STEP_DEG` over `coarse_axis ± FINE_HALF_WINDOW_DEG`, then
+/// parabolic-refines the peak. Using the ink mask (not grayscale) ignores
+/// background gradients and shadows. Returns the refined axis in radians
+/// (mod pi).
+pub fn fine_axis(
+    gray: &[f64],
+    width: usize,
+    height: usize,
+    coarse_axis_rad: f64,
+) -> f64 {
+    if width == 0 || height == 0 {
+        return coarse_axis_rad;
+    }
+    let thr = crate::ink::otsu_threshold(gray);
+    // Square-pad with background (0.0) so small rotations stay in-canvas.
+    let size = width.max(height);
+    let mut mask = vec![0.0f64; size * size];
+    let ox = (size - width) / 2;
+    let oy = (size - height) / 2;
+    let mut ink = 0usize;
+    for y in 0..height {
+        for x in 0..width {
+            if gray[y * width + x] <= thr {
+                mask[(y + oy) * size + (x + ox)] = 1.0;
+                ink += 1;
+            }
+        }
+    }
+    // ~blank page: no text lines to align, so don't refine on noise
+    // (deskew.py abstains below 1% foreground).
+    if (ink as f64) < 0.004 * (size * size) as f64 {
+        return coarse_axis_rad;
+    }
+
+    let coarse_deg = coarse_axis_rad.to_degrees() % 180.0;
+    let n = ((2.0 * FINE_HALF_WINDOW_DEG / FINE_STEP_DEG + 0.5) as usize) + 1;
+    let mut curve = Vec::with_capacity(n);
+    for i in 0..n {
+        let deg = coarse_deg - FINE_HALF_WINDOW_DEG + i as f64 * FINE_STEP_DEG;
+        curve.push(projection_variance_at(&mask, size, size, deg, 1, 1));
+    }
+    let (imax, _) = argmax(&curve);
+    let refined_bin = parabolic_refine(&curve, imax);
+    let mut refined_deg =
+        (coarse_deg - FINE_HALF_WINDOW_DEG + refined_bin * FINE_STEP_DEG) % 180.0;
+    if refined_deg < 0.0 {
+        refined_deg += 180.0;
+    }
+    refined_deg.to_radians()
+}
+
 /// This is the single-peak (argmax-only) axis used by the standalone/bench
 /// entry points; `rotation_features` prefers the multi-candidate selection
 /// that scores the top local maxima by text-line quality.
@@ -349,6 +411,18 @@ mod tests {
             (best_axis_deg - 17.0).abs() < 1.5,
             "best_axis_deg={best_axis_deg} imax={imax}"
         );
+    }
+
+    #[test]
+    fn test_fine_axis_refines() {
+        for &deg in &[4.7, 17.3, 42.8, 89.1] {
+            let gray = striped(deg, 256, 256, 10.0);
+            let curve = radon_curve(&gray, 256, 256);
+            let (imax, _) = argmax(&curve);
+            let coarse_rad = (parabolic_refine(&curve, imax) * RADON_DEG_PER_BIN).to_radians();
+            let fine = fine_axis(&gray, 256, 256, coarse_rad).to_degrees().rem_euclid(180.0);
+            assert!((fine - deg).abs() < 0.35, "deg={deg} fine={fine}");
+        }
     }
 
     #[test]

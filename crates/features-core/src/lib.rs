@@ -149,9 +149,12 @@ pub fn rotation_extract(
 ) -> RotationExtract {
     let curve = crate::radon::radon_curve(gray, width, height);
     let axes = crate::radon::radon_top_axes(&curve, 4);
-    // One deskew per candidate axis inside; winner's flip features + glyph
-    // crops are reused from the single winner deskew.
-    let best = crate::textline::textline_flip_best_axis(gray, width, height, &axes);
+    // S0/S1: pick the coarse winner by text-line quality.
+    let coarse = crate::textline::textline_flip_best_axis(gray, width, height, &axes);
+    // S2: refine the coarse axis on an Otsu ink mask (fine projection search).
+    let refined = crate::radon::fine_axis(gray, width, height, coarse.axis);
+    // S3: flip features + glyph crops from ONE deskew at the refined axis.
+    let best = crate::textline::textline_flip_at_axis(gray, width, height, refined);
     let (peakiness, peak_margin, concentration) = crate::radon::radon_summary(&curve);
     let mut features = Vec::new();
     features.push(best.axis);
