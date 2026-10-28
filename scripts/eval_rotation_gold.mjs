@@ -12,12 +12,11 @@ const N = parseInt(process.argv[2] || '1000', 10);
 const START = parseInt(process.argv[3] || '0', 10);
 
 const wasmBytes = readFileSync(resolve(ROOT, 'frontend/wasm_bridge_bg.wasm'));
-const { initSync, classify_file_v2, load_model_v2, model_version } = await import(
+const { initSync, classify_file, load_model } = await import(
   resolve(ROOT, 'frontend/wasm_bridge.js')
 );
 initSync(new WebAssembly.Module(wasmBytes));
-load_model_v2(readFileSync(resolve(ROOT, 'data/model_v8.json'), 'utf-8'));
-if (model_version() !== '0.5.0') throw new Error(`expected model 0.5.0, got ${model_version()}`);
+load_model(readFileSync(resolve(ROOT, 'data/model.json'), 'utf-8'));
 
 function circularErr(a, b, period = 360) {
   const d = Math.abs(a - b);
@@ -34,7 +33,7 @@ const dist = {};
 for (let i = START; i < START + N; i++) {
   const fn = `fatura2_test_${i}.jpg`;
   const bytes = readFileSync(resolve(ROOT, 'data/images/fatura2', fn));
-  const r = classify_file_v2(bytes);
+  const r = classify_file(bytes);
   n++;
   const isDoc = r.is_document >= 0.5;
   if (isDoc) nDoc++; else notDoc++;

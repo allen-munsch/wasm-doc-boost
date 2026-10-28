@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Per-dataset rotation breakdown for the SHIPPED Rust inference.
 
-Runs py_features.predict_v2 (the exact backend twin of the frontend's
-classify_file_v2: same features-core extraction, same gbdt-core forest, same
+Runs py_features.predict (the exact backend twin of the frontend's
+classify_file: same features-core extraction, same gbdt-core forest, same
 glyph gate + confidence calibration) over the held-out test split of a v2
 features npz, reconstructing each rotated sample from its base image exactly
 as export_worker.py did. Numbers here match the shipped WASM bit-for-bit.
 
-The Python-only mirror in train_model_v2.combine_rotation_py does NOT have
+The Python-only mirror in train_model.combine_rotation_py does NOT have
 the glyph gate (glyph crops aren't stored in the npz), so its rotation
 numbers differ from shipped inference; use this script for reporting.
 
@@ -27,7 +27,7 @@ from PIL import Image
 import py_features
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import train_model_v2 as t
+import train_model as t
 
 MAX_LONG_EDGE = 512
 BORDER_FILL_WIDTH = 4
@@ -58,7 +58,7 @@ def main():
     rott = rotation_deg[test_idx]
     print(f"test samples: {len(test_idx)}", flush=True)
 
-    py_features.load_model_v2(open(args.model).read())
+    py_features.load_model(open(args.model).read())
 
     base = np.array([str(f).rsplit("_rot", 1)[0] for f in fnst])
     src_down = {}
@@ -89,7 +89,7 @@ def main():
             img = img.rotate(angle, expand=True, resample=Image.BICUBIC, fillcolor=fill)
         rw, rh = img.size
         px = np.asarray(img, dtype=np.uint8).tobytes()
-        r = py_features.predict_v2(px, rw, rh)
+        r = py_features.predict(px, rw, rh)
         rot_pred[i] = r["rotation_deg"]
         conf[i] = r["rotation_confidence"]
         review[i] = bool(r["needs_review"])

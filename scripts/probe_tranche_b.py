@@ -25,7 +25,7 @@ for p in imgs:
     a = np.frombuffer(px, np.uint8).reshape(h, w, 3)
     for rot, flip in ((0, 1), (180, 0)):
         arr = a if rot == 0 else a[::-1, ::-1, :]
-        f = py_features.extract_all_v2(arr.tobytes(), w, h)
+        f = py_features.extract_all(arr.tobytes(), w, h)
         rows.append(f)
         labels.append(flip)
 

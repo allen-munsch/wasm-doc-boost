@@ -6,7 +6,7 @@ Cardinal mode (default, pre-rework): 4 rotations (0/90/180/270), 9 labels,
 
 --v2 (per-degree rework): per base image K=16 angles = the 4 cardinal
 rotations + 6 seeded-random theta in (0,180), each exported at theta and
-theta+180 (flip-contrast pairs); 124 features (extract_all_v2);
+theta+180 (flip-contrast pairs); 124 features (extract_all);
 7 labels [is_document, is_digital, is_paper, is_crumpled, is_shadow, flip,
 trust] plus a rotation_deg metadata array. flip = 1 when the applied PIL CCW
 rotation is >= 180 (after deskew by the radon axis the text is upside down);
@@ -39,7 +39,7 @@ LABEL_NAMES = [
     "rotation_180",
     "rotation_270",
 ]
-V2_LABEL_NAMES = [
+LABEL_NAMES = [
     "is_document",
     "is_digital",
     "is_paper",
@@ -50,13 +50,13 @@ V2_LABEL_NAMES = [
 ]
 CSV_LABEL_NAMES = ["is_document", "is_digital", "is_paper", "is_crumpled", "is_shadow"]
 ROTATION_ANGLES = [0, 90, 180, 270]
-V2_CARDINAL_ANGLES = [0, 90, 180, 270]
-V2_K_FLIP_PAIRS = 6  # random theta in (0,180), each exported at theta and theta+180
+CARDINAL_ANGLES = [0, 90, 180, 270]
+K_FLIP_PAIRS = 6  # random theta in (0,180), each exported at theta and theta+180
 MAX_LONG_EDGE = 512
 BORDER_FILL_WIDTH = 4
-V2_FEAT_COUNT = 124
-V2_RADON_AXIS_INDEX = 100  # first rotation feature (radon best_axis_rad)
-V2_FLIP_SCORE_INDEX = 104  # textline flip_score (asc-desc ink, + = upright)
+FEAT_COUNT = 124
+RADON_AXIS_INDEX = 100  # first rotation feature (radon best_axis_rad)
+FLIP_SCORE_INDEX = 104  # textline flip_score (asc-desc ink, + = upright)
 TRUST_TOLERANCE_DEG = 1.0
 
 
@@ -104,8 +104,8 @@ def v2_angles(fname):
     sample has its exact flip counterpart at the same axis."""
     seed = hashlib.sha256(fname.encode()).digest()
     rng = random.Random(seed)
-    angles = list(V2_CARDINAL_ANGLES)
-    for _ in range(V2_K_FLIP_PAIRS):
+    angles = list(CARDINAL_ANGLES)
+    for _ in range(K_FLIP_PAIRS):
         theta = rng.uniform(0.0, 180.0)
         angles.append(theta)
         angles.append(theta + 180.0)
@@ -178,14 +178,14 @@ def process_one_v2(fname, label_vec, images_dir, gpu=False):
                 rotated_rgb = np.array(rotated, dtype=np.uint8)
             h2, w2 = rotated_rgb.shape[:2]
             pixels = np.ascontiguousarray(rotated_rgb).tobytes()
-            feats, _, _ = py_features.extract_all_v2_hybrid(pixels, w2, h2)
-            assert len(feats) == V2_FEAT_COUNT, (
-                f"expected {V2_FEAT_COUNT} features, got {len(feats)}"
+            feats = py_features.extract_all(pixels, w2, h2)
+            assert len(feats) == FEAT_COUNT, (
+                f"expected {FEAT_COUNT} features, got {len(feats)}"
             )
 
             # Radon is deterministic and mod-180 blind; PIL CCW rotate by
             # `angle` puts the text-line axis at (180 - angle) mod 180.
-            axis_deg = math.degrees(feats[V2_RADON_AXIS_INDEX]) % 180.0
+            axis_deg = math.degrees(feats[RADON_AXIS_INDEX]) % 180.0
             true_axis = (180.0 - angle) % 180.0
             err = min(abs(axis_deg - true_axis), 180.0 - abs(axis_deg - true_axis))
             trust = 1 if err <= TRUST_TOLERANCE_DEG else 0
@@ -202,10 +202,10 @@ def process_one_v2(fname, label_vec, images_dir, gpu=False):
         # unrotated source, cross-checked between the 0 and 90 rotations
         # (both deskew to upright, so their flip_scores must agree).
         fs0 = next(
-            f[V2_FLIP_SCORE_INDEX] for f, a in zip(feats_list, angles_list) if a == 0.0
+            f[FLIP_SCORE_INDEX] for f, a in zip(feats_list, angles_list) if a == 0.0
         )
         fs90 = next(
-            f[V2_FLIP_SCORE_INDEX] for f, a in zip(feats_list, angles_list) if a == 90.0
+            f[FLIP_SCORE_INDEX] for f, a in zip(feats_list, angles_list) if a == 90.0
         )
         # Born-digital sources (is_digital == 1) are upright by construction;
         # the asc/desc oracle is a coin flip on all-caps/digit invoices
@@ -286,7 +286,7 @@ def main():
             labels=labels_arr,
             filenames=np.array(filename_list),
             rotation_deg=np.array(angle_list, dtype=np.float64),
-            label_names=np.array(V2_LABEL_NAMES),
+            label_names=np.array(LABEL_NAMES),
         )
     else:
         np.savez_compressed(

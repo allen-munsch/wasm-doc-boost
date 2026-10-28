@@ -2,7 +2,7 @@
 """GPU rotation for export workers (torch), replacing the per-angle PIL rotate.
 
 Matches PIL Image.rotate(angle, resample=BICUBIC, expand=True, fillcolor=fill)
-geometry so the radon feature extractor (extract_all_v2) still receives the
+geometry so the radon feature extractor (extract_all) still receives the
 same canvas dimensions. Only the rotate moves to CUDA; the radon stays on CPU
 and is called by the caller.
 

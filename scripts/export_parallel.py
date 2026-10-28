@@ -1,38 +1,20 @@
 #!/usr/bin/env python3
-"""
-Launch parallel feature export via subprocess workers.
+"""Parallel v2 (per-degree) feature extraction.
 
-Splits the image list into chunks, runs one worker subprocess per chunk,
-then merges the resulting .npz files.
-
-Usage:
-    PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 python scripts/export_parallel.py \\
-        --images data/images --labels data/labels.csv --output data/features_v3.npz
+Splits labels.csv into N chunks, runs export_worker.py --v2 on each chunk
+as a subprocess (PyO3 hangs with Pool), then merges the .npz files.
 """
 
 import argparse
 import csv
 import os
-import shutil
 import subprocess
 import sys
 import tempfile
-import time
 
 import numpy as np
 
 LABEL_NAMES = [
-    "is_document",
-    "is_digital",
-    "is_paper",
-    "is_crumpled",
-    "is_shadow",
-    "rotation_0",
-    "rotation_90",
-    "rotation_180",
-    "rotation_270",
-]
-V2_LABEL_NAMES = [
     "is_document",
     "is_digital",
     "is_paper",
@@ -43,119 +25,82 @@ V2_LABEL_NAMES = [
 ]
 
 
-def chunk_list(lst, n):
-    """Split list into n roughly equal chunks."""
-    k, m = divmod(len(lst), n)
-    return [lst[i * k + min(i, m) : (i + 1) * k + min(i + 1, m)] for i in range(n)]
-
-
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--images", required=True)
     parser.add_argument("--labels", required=True)
     parser.add_argument("--output", required=True)
-    parser.add_argument("--workers", type=int, default=0)
-    parser.add_argument("--v2", action="store_true", help="per-degree rework export")
-    parser.add_argument("--gpu", action="store_true", help="rotate on CUDA (radon stays CPU)")
+    parser.add_argument("--workers", type=int, default=16)
     args = parser.parse_args()
 
-    # Load filenames from CSV
-    filenames = []
     with open(args.labels, newline="") as f:
-        for row in csv.DictReader(f):
-            filenames.append(row["filename"])
+        rows = list(csv.DictReader(f))
 
-    n_workers = args.workers if args.workers > 0 else os.cpu_count()
-    n_workers = min(n_workers, len(filenames))
-    print(f"Loaded {len(filenames)} images, splitting across {n_workers} workers")
+    chunk_size = (len(rows) + args.workers - 1) // args.workers
+    with tempfile.TemporaryDirectory() as tmpdir:
+        procs = []
+        outputs = []
+        for i in range(args.workers):
+            chunk = rows[i * chunk_size : (i + 1) * chunk_size]
+            if not chunk:
+                break
+            flist_path = os.path.join(tmpdir, f"files_{i:03d}.txt")
+            with open(flist_path, "w") as f:
+                for r in chunk:
+                    f.write(r["filename"] + "\n")
+            out_path = os.path.join(tmpdir, f"chunk_{i:03d}.npz")
+            outputs.append(out_path)
+            env = os.environ.copy()
+            proc = subprocess.Popen(
+                [
+                    sys.executable,
+                    "scripts/export_worker.py",
+                    "--images",
+                    args.images,
+                    "--labels-csv",
+                    args.labels,
+                    "--output",
+                    out_path,
+                    "--v2",
+                ],
+                stdin=open(flist_path),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                env=env,
+            )
+            procs.append((i, proc))
+            print(f"launched worker {i} ({len(chunk)} images)", flush=True)
 
-    chunks = chunk_list(filenames, n_workers)
+        for i, proc in procs:
+            out_txt, _ = proc.communicate()
+            tail = out_txt.strip()[-200:] if out_txt.strip() else "(no output)"
+            print(f"worker {i} rc={proc.returncode}: {tail}", flush=True)
 
-    tmpdir = tempfile.mkdtemp(prefix="export_")
-    chunk_files = []
-    procs = []
+        missing = [o for o in outputs if not os.path.exists(o)]
+        if missing:
+            print(f"ERROR: {len(missing)} output files missing", flush=True)
+            sys.exit(1)
 
-    t0 = time.time()
-    for i, chunk in enumerate(chunks):
-        chunk_file = os.path.join(tmpdir, f"chunk_{i:04d}.npz")
-        chunk_files.append(chunk_file)
-
-        cmd = [
-            sys.executable,
-            "-u",
-            "scripts/export_worker.py",
-            "--images",
-            args.images,
-            "--labels-csv",
-            args.labels,
-            "--output",
-            chunk_file,
-        ]
-        if args.v2:
-            cmd.append("--v2")
-        if args.gpu:
-            cmd.append("--gpu")
-        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, text=True)
-        proc.stdin.write("\n".join(chunk) + "\n")
-        proc.stdin.close()
-        procs.append((i, proc))
-
-    print(f"Launched {n_workers} workers, waiting...")
-
-    for i, proc in procs:
-        rc = proc.wait()
-        status = "OK" if rc == 0 else f"FAILED(rc={rc})"
-        print(f"Worker {i}/{n_workers}: {status}")
-
-    t1 = time.time()
-    print(f"All workers done in {t1 - t0:.1f}s")
-
-    # Merge chunks
-    print("Merging chunks...")
-    all_features = []
-    all_labels = []
-    all_filenames = []
-    all_angles = []
-
-    for chunk_file in chunk_files:
-        if not os.path.exists(chunk_file):
-            print(f"  WARNING: {chunk_file} missing, skipping")
-            continue
-        data = np.load(chunk_file, allow_pickle=True)
-        all_features.append(data["features"])
-        all_labels.append(data["labels"])
-        all_filenames.append(data["filenames"])
-        if args.v2:
-            all_angles.append(data["rotation_deg"])
-
-    features = np.concatenate(all_features, axis=0)
-    labels_arr = np.concatenate(all_labels, axis=0)
-    filenames_arr = np.concatenate(all_filenames, axis=0)
-
-    if args.v2:
-        angles_arr = np.concatenate(all_angles, axis=0)
+        feats, lbls, fns, degs = [], [], [], []
+        total = 0
+        for o in outputs:
+            d = np.load(o)
+            feats.append(d["features"])
+            lbls.append(d["labels"])
+            fns.append(d["filenames"])
+            degs.append(d["rotation_deg"])
+            total += len(d["features"])
         np.savez_compressed(
             args.output,
-            features=features,
-            labels=labels_arr,
-            filenames=filenames_arr,
-            rotation_deg=angles_arr,
-            label_names=np.array(V2_LABEL_NAMES),
-        )
-    else:
-        np.savez_compressed(
-            args.output,
-            features=features,
-            labels=labels_arr,
-            filenames=filenames_arr,
+            features=np.concatenate(feats, axis=0),
+            labels=np.concatenate(lbls, axis=0),
+            filenames=np.concatenate(fns, axis=0),
+            rotation_deg=np.concatenate(degs, axis=0),
             label_names=np.array(LABEL_NAMES),
         )
-    file_size = os.path.getsize(args.output)
-    print(
-        f"Written {args.output}: {features.shape} features, {labels_arr.shape} labels ({file_size / 1024:.0f} KB)"
-    )
-
-    shutil.rmtree(tmpdir, ignore_errors=True)
+        size_mb = os.path.getsize(args.output) / 1e6
+        print(f"merged {total} samples -> {args.output} ({size_mb:.1f} MB)", flush=True)
 
 
 if __name__ == "__main__":

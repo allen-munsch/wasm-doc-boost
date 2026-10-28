@@ -12,13 +12,13 @@ const MODEL_JSON = resolve(root, 'data/model_v3.json');
 
 // Load WASM
 const wasmBytes = readFileSync(resolve(root, 'frontend/wasm_bridge_bg.wasm'));
-const { initSync, classify_file_v2, load_model_v2 } = await import(
+const { initSync, classify_file, load_model } = await import(
   resolve(root, 'frontend/wasm_bridge.js')
 );
 initSync(new WebAssembly.Module(wasmBytes));
 
 // Load model
-load_model_v2(readFileSync(MODEL_JSON, 'utf-8'));
+load_model(readFileSync(MODEL_JSON, 'utf-8'));
 
 const confusion = LABEL_NAMES.map(() => ({ tp: 0, fp: 0, tn: 0, fn: 0 }));
 let classified = 0;
@@ -40,7 +40,7 @@ for (const sample of chunk) {
 
   let result;
   try {
-    result = classify_file_v2(bytes);
+    result = classify_file(bytes);
   } catch {
     errors++;
     for (let i = 0; i < 5; i++) {
