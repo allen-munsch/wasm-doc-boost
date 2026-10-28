@@ -270,6 +270,67 @@ pub fn otsu_threshold(values: &[f64]) -> f64 {
     best_thresh
 }
 
+/// Sauvola local threshold binarization: ink = pixel <= local mean-adjusted
+/// threshold. A single global Otsu threshold fails on photographs with uneven
+/// lighting (one half lit, one half shadowed); Sauvola adapts per pixel.
+///
+/// T = m * (1 + k * (s / R - 1)) over an odd window whose side is
+/// min(w,h)/24 clamped to [7, 41]; integral images keep it O(n). k = 0.2,
+/// R = 128 (8-bit gray dynamic range).
+pub fn sauvola_binarize(gray: &[f64], width: usize, height: usize) -> Vec<bool> {
+    if width == 0 || height == 0 {
+        return Vec::new();
+    }
+    let mut win = (width.min(height) / 24) | 1;
+    if win < 7 {
+        win = 7;
+    } else if win > 41 {
+        win = 41;
+    }
+    let half = win / 2;
+
+    let sw = width + 1;
+    let mut integral = alloc::vec![0.0f64; sw * (height + 1)];
+    let mut integral_sq = alloc::vec![0.0f64; sw * (height + 1)];
+    for y in 0..height {
+        let row = y * width;
+        let mut row_sum = 0.0f64;
+        let mut row_sq = 0.0f64;
+        for x in 0..width {
+            let v = gray[row + x];
+            row_sum += v;
+            row_sq += v * v;
+            let above = y * sw + (x + 1);
+            integral[(y + 1) * sw + (x + 1)] = integral[above] + row_sum;
+            integral_sq[(y + 1) * sw + (x + 1)] = integral_sq[above] + row_sq;
+        }
+    }
+
+    let k = 0.2;
+    let r = 128.0;
+    let mut mask = alloc::vec![false; width * height];
+    for y in 0..height {
+        let y0 = y.saturating_sub(half);
+        let y1 = (y + half + 1).min(height);
+        let row = y * width;
+        for x in 0..width {
+            let x0 = x.saturating_sub(half);
+            let x1 = (x + half + 1).min(width);
+            let sum = integral[y1 * sw + x1] - integral[y0 * sw + x1]
+                - integral[y1 * sw + x0] + integral[y0 * sw + x0];
+            let sq = integral_sq[y1 * sw + x1] - integral_sq[y0 * sw + x1]
+                - integral_sq[y1 * sw + x0] + integral_sq[y0 * sw + x0];
+            let n = ((y1 - y0) * (x1 - x0)) as f64;
+            let mean = sum / n;
+            let var = (sq / n) - mean * mean;
+            let std = if var > 0.0 { libm::sqrt(var) } else { 0.0 };
+            let thresh = mean * (1.0 + k * (std / r - 1.0));
+            mask[row + x] = gray[row + x] <= thresh;
+        }
+    }
+    mask
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -376,5 +437,42 @@ mod tests {
         );
         assert!(f[1] > 0.5, "concentration={}", f[1]);
         assert_eq!(f.len(), 2);
+    }
+
+    #[test]
+    fn sauvola_finds_text_on_uneven_background() {
+        // Left half dark background (~80), right half bright (~200); text bars
+        // are full black in both halves. A global Otsu would split by the two
+        // background modes and lose one half; Sauvola keeps the ink everywhere.
+        let w = 80usize;
+        let h = 40usize;
+        let mut gray = alloc::vec![0.0f64; w * h];
+        for y in 0..h {
+            for x in 0..w {
+                gray[y * w + x] = if x < 40 { 80.0 } else { 200.0 };
+            }
+        }
+        for y in 10..14 {
+            for x in 0..w {
+                gray[y * w + x] = 0.0;
+            }
+        }
+        for y in 26..30 {
+            for x in 0..w {
+                gray[y * w + x] = 0.0;
+            }
+        }
+        let mask = sauvola_binarize(&gray, w, h);
+        let ink = |x: usize, y: usize| mask[y * w + x];
+        // text ink in both halves
+        for x in [5usize, 75usize] {
+            assert!(ink(x, 12), "text ink at x={} y=12", x);
+            assert!(ink(x, 28), "text ink at x={} y=28", x);
+        }
+        // background stays paper in both halves, away from text edges
+        for x in [5usize, 75usize] {
+            assert!(!ink(x, 2), "bg paper at x={} y=2", x);
+            assert!(!ink(x, 36), "bg paper at x={} y=36", x);
+        }
     }
 }

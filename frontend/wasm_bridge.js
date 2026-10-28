@@ -125,12 +125,21 @@ export function load_model_v2(json) {
 }
 
 /**
- * Manifest version of the loaded model (0 when unset or not loaded).
- * @returns {number}
+ * Release-tag version of the loaded model (empty string when unset or not
+ * loaded). Matches the tag the model.json was built for, e.g. "0.4.0".
+ * @returns {string}
  */
 export function model_version() {
-    const ret = wasm.model_version();
-    return ret >>> 0;
+    let deferred1_0;
+    let deferred1_1;
+    try {
+        const ret = wasm.model_version();
+        deferred1_0 = ret[0];
+        deferred1_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+    }
 }
 
 /**

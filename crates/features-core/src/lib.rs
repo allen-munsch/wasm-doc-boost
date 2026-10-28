@@ -31,6 +31,7 @@ pub mod color;
 pub mod crumple;
 pub mod document;
 pub mod edges;
+pub mod glyph;
 pub mod ink;
 pub mod noise;
 pub mod projection;
@@ -88,45 +89,65 @@ fn extract_core(pixels: &[u8], width: usize, height: usize) -> Vec<f64> {
     features
 }
 
-/// The 16 Phase 1 rotation signals (per-degree rework).
+/// The 24 rotation signals (16 Phase 1 + 8 Phase 1b flip features).
 ///
 /// Radon is computed once; the deterministic axis drives the textline deskew,
-/// so the axis and flip heads share a single Radon pass. Order:
+/// so the axis and flip heads share a single Radon pass. The 8 new flip
+/// features are APPENDED after the Phase 1 block, so indices 0..116 stay
+/// byte-for-byte backward compatible with the 116-feature model. Order:
 /// radon [axis_rad, peakiness, peak_margin, concentration] (4), textline flip
 /// [flip_score, vote_frac, n_lines, asc_frac, desc_frac, body_frac] (6),
 /// boundary [long_edge_rad, area_frac, aspect, boundary_visible] (4),
-/// unfolded docstrum [mean_angle_rad, concentration] (2).
+/// unfolded docstrum [mean_angle_rad, concentration] (2), tranche A gradient
+/// [signed_vert_grad, baseline_edge_weight, gy_skew, top_bottom_edge_sharpness]
+/// (4), tranche B character [char_centroid_offset, char_topheavy_frac,
+/// char_asym_strength, body_vert_bias] (4).
 ///
 /// The axis is chosen by multi-candidate selection: the top-4 local maxima of
 /// the Radon curve are each scored by text-line quality (n_lines, then total
 /// line ink), and the best wins. This fixes the near-tie failure where a
 /// perpendicular structure (table rules, page edge) out-peaks the text axis
 /// and the bare argmax lands 90 degrees off.
+/// Rotation extraction result: the 24 rotation features plus the winner axis
+/// and the per-glyph classifier crops from the same single winner deskew.
+pub struct RotationExtract {
+    pub features: Vec<f64>,
+    pub axis_rad: f64,
+    pub glyph_crops: Vec<f32>,
+    pub glyph_count: usize,
+}
+
 pub fn rotation_features(gray: &[f64], pixels: &[u8], width: usize, height: usize) -> Vec<f64> {
-    let mut features = Vec::new();
+    rotation_extract(gray, pixels, width, height).features
+}
+
+pub fn rotation_extract(
+    gray: &[f64],
+    pixels: &[u8],
+    width: usize,
+    height: usize,
+) -> RotationExtract {
     let curve = crate::radon::radon_curve(gray, width, height);
     let axes = crate::radon::radon_top_axes(&curve, 4);
-    let mut best_axis = axes[0];
-    let mut best_quality = (0.0f64, 0.0f64);
-    for (k, ax) in axes.iter().enumerate() {
-        let (n_lines, ink) = crate::textline::textline_line_quality(gray, width, height, *ax);
-        if k == 0 || n_lines > best_quality.0 || (n_lines == best_quality.0 && ink > best_quality.1)
-        {
-            best_axis = *ax;
-            best_quality = (n_lines, ink);
-        }
-    }
+    // One deskew per candidate axis inside; winner's flip features + glyph
+    // crops are reused from the single winner deskew.
+    let best = crate::textline::textline_flip_best_axis(gray, width, height, &axes);
     let (peakiness, peak_margin, concentration) = crate::radon::radon_summary(&curve);
-    features.push(best_axis);
+    let mut features = Vec::new();
+    features.push(best.axis);
     features.push(peakiness);
     features.push(peak_margin);
     features.push(concentration);
-    features.extend(crate::textline::textline_flip_features_with_axis(
-        gray, width, height, best_axis,
-    ));
+    features.extend_from_slice(&best.features[0..6]);
     features.extend(crate::boundary::boundary_features(pixels, width, height));
     features.extend(crate::ink::docstrum_axis(gray, width, height));
-    features
+    features.extend_from_slice(&best.features[6..14]);
+    RotationExtract {
+        features,
+        axis_rad: best.axis,
+        glyph_crops: best.glyph_crops,
+        glyph_count: best.glyph_count,
+    }
 }
 
 /// Extract all 103 pixel heuristics from raw RGB bytes.
@@ -159,6 +180,22 @@ pub fn extract_all_v2(pixels: &[u8], width: usize, height: usize) -> Vec<f64> {
     features
 }
 
+/// Extract the rework feature vector plus the per-glyph flip evidence from
+/// the same winner deskew: `(features, glyph_sum_logodds, glyph_count)`.
+/// Positive glyph_sum_logodds = flipped, negative = upright.
+pub fn extract_all_v2_with_glyph(
+    pixels: &[u8],
+    width: usize,
+    height: usize,
+) -> (Vec<f64>, f64, f64) {
+    let gray = crate::to_grayscale(pixels, width, height);
+    let mut features = extract_core(pixels, width, height);
+    let rot = rotation_extract(&gray, pixels, width, height);
+    features.extend(rot.features);
+    let (sum_logodds, count) = crate::glyph::glyph_logodds_from_crops(&rot.glyph_crops);
+    (features, sum_logodds, count as f64)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -180,10 +217,10 @@ mod tests {
     fn feature_count_contract() {
         let px = sample_rgb(64, 64);
         assert_eq!(extract_all(&px, 64, 64).len(), 103);
-        assert_eq!(extract_all_v2(&px, 64, 64).len(), 116);
+        assert_eq!(extract_all_v2(&px, 64, 64).len(), 124);
         assert_eq!(
             rotation_features(&to_grayscale(&px, 64, 64), &px, 64, 64).len(),
-            16
+            24
         );
     }
 

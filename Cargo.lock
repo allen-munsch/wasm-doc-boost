@@ -801,7 +801,7 @@ dependencies = [
 
 [[package]]
 name = "features-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "libm",
 ]
@@ -875,7 +875,7 @@ dependencies = [
 
 [[package]]
 name = "gbdt-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1488,7 +1488,7 @@ dependencies = [
 
 [[package]]
 name = "layout-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "image",
@@ -1894,7 +1894,7 @@ dependencies = [
 
 [[package]]
 name = "ocr-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "geo",
  "image",
@@ -1997,7 +1997,7 @@ checksum = "2ee67f1008b1ba2321834326597b8e186293b049a023cdef258527550b9935b4"
 
 [[package]]
 name = "pdf-inspector-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "include_dir",
  "log",
@@ -2017,11 +2017,11 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
 name = "pii-core"
-version = "0.3.0"
+version = "0.4.0"
 
 [[package]]
 name = "pii-span-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "half",
@@ -2160,7 +2160,7 @@ checksum = "d55d956fa96f5ec02be2e13af0e20391a5aa83d6a074e3ad368959d0fab299ea"
 
 [[package]]
 name = "py-features"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "features-core",
  "gbdt-core",
@@ -3274,7 +3274,7 @@ checksum = "c31d56021e873866c968588ed85ccdf56db5c426e44afdb4618c39895104b920"
 
 [[package]]
 name = "wasm-bridge"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "features-core",
  "gbdt-core",

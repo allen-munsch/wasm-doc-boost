@@ -7,7 +7,7 @@ export const classify_file_v2: (a: number, b: number) => [number, number, number
 export const load_crf_model: (a: number, b: number) => [number, number];
 export const load_model: (a: number, b: number) => [number, number];
 export const load_model_v2: (a: number, b: number) => [number, number];
-export const model_version: () => number;
+export const model_version: () => [number, number];
 export const scan_pii: (a: number, b: number) => [number, number, number];
 export const classifyPdf: (a: number, b: number) => [number, number, number];
 export const extractTextWithPositions: (a: number, b: number) => [number, number, number];
@@ -17,4 +17,5 @@ export const __wbindgen_exn_store: (a: number) => void;
 export const __externref_table_alloc: () => number;
 export const __wbindgen_externrefs: WebAssembly.Table;
 export const __externref_table_dealloc: (a: number) => void;
+export const __wbindgen_free: (a: number, b: number, c: number) => void;
 export const __wbindgen_start: () => void;

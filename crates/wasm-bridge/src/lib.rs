@@ -2,7 +2,11 @@ use std::sync::Mutex;
 
 use wasm_bindgen::prelude::*;
 
-use gbdt_core::{DEFAULT_TAU, LABELS_V2, Model, ModelManifest, combine_rotation};
+use gbdt_core::{
+    combine_rotation_calibrated, GlyphEvidence, Model, ModelManifest, DEFAULT_TAU, LABELS_V2,
+};
+#[cfg(test)]
+use gbdt_core::combine_rotation;
 
 mod pdf;
 
@@ -51,15 +55,16 @@ pub fn load_model_v2(json: &str) -> Result<(), JsValue> {
     Ok(())
 }
 
-/// Manifest version of the loaded model (0 when unset or not loaded).
+/// Release-tag version of the loaded model (empty string when unset or not
+/// loaded). Matches the tag the model.json was built for, e.g. "0.4.0".
 #[wasm_bindgen]
-pub fn model_version() -> u32 {
+pub fn model_version() -> String {
     MODEL_V2
         .lock()
         .unwrap()
         .as_ref()
-        .and_then(|m| m.version)
-        .unwrap_or(0)
+        .and_then(|m| m.version.clone())
+        .unwrap_or_default()
 }
 
 /// Scan text for PII/PCI (credit card numbers, SSNs, emails, phones).
@@ -275,10 +280,19 @@ pub fn classify_file_v2(bytes: &[u8]) -> Result<JsValue, JsValue> {
     let (width, height) = rgb.dimensions();
     let pixels = rgb.into_raw();
 
-    let features = features_core::extract_all_v2(&pixels, width as usize, height as usize);
+    let (features, glyph_logodds, glyph_count) =
+        features_core::extract_all_v2_with_glyph(&pixels, width as usize, height as usize);
     let preds = model.predict(&features);
-    let (rotation_deg, rotation_confidence, needs_review) =
-        combine_rotation(&features, &preds, tau);
+    let d = combine_rotation_calibrated(
+        &features,
+        &preds,
+        tau,
+        manifest.confidence_calibration.as_deref(),
+        Some(GlyphEvidence {
+            sum_logodds: glyph_logodds,
+            count: glyph_count,
+        }),
+    );
 
     let result = js_sys::Object::new();
     for (label, &pred) in manifest.labels.iter().zip(preds.iter()) {
@@ -287,17 +301,47 @@ pub fn classify_file_v2(bytes: &[u8]) -> Result<JsValue, JsValue> {
     js_sys::Reflect::set(
         &result,
         &JsValue::from_str("rotation_deg"),
-        &JsValue::from_f64(rotation_deg),
+        &JsValue::from_f64(d.rotation_deg),
     )?;
     js_sys::Reflect::set(
         &result,
         &JsValue::from_str("rotation_confidence"),
-        &JsValue::from_f64(rotation_confidence),
+        &JsValue::from_f64(d.confidence),
     )?;
     js_sys::Reflect::set(
         &result,
         &JsValue::from_str("needs_review"),
-        &JsValue::from_bool(needs_review),
+        &JsValue::from_bool(d.needs_review),
+    )?;
+    js_sys::Reflect::set(
+        &result,
+        &JsValue::from_str("flip_vote_count"),
+        &JsValue::from_f64(d.flip_vote_count),
+    )?;
+    js_sys::Reflect::set(
+        &result,
+        &JsValue::from_str("flip_vote_agreement"),
+        &JsValue::from_f64(d.flip_vote_agreement),
+    )?;
+    js_sys::Reflect::set(
+        &result,
+        &JsValue::from_str("axis_vote_count"),
+        &JsValue::from_f64(d.axis_vote_count),
+    )?;
+    js_sys::Reflect::set(
+        &result,
+        &JsValue::from_str("axis_agreement"),
+        &JsValue::from_f64(d.axis_agreement),
+    )?;
+    js_sys::Reflect::set(
+        &result,
+        &JsValue::from_str("glyph_count"),
+        &JsValue::from_f64(d.glyph_count),
+    )?;
+    js_sys::Reflect::set(
+        &result,
+        &JsValue::from_str("glyph_logodds"),
+        &JsValue::from_f64(d.glyph_logodds),
     )?;
 
     Ok(result.into())
@@ -493,8 +537,8 @@ mod tests {
         let feats = features_core::extract_all_v2(&pixels, 64, 64);
         assert_eq!(
             feats.len(),
-            116,
-            "expected 116 features, got {}",
+            124,
+            "expected 124 features, got {}",
             feats.len()
         );
     }
@@ -506,28 +550,28 @@ mod tests {
         features[RADON_AXIS_INDEX] = 17.0_f64.to_radians();
 
         let preds = [0.9, 0.0, 0.0, 0.0, 0.0, 0.1, 0.8];
-        let (deg, conf, review) = combine_rotation(&features, &preds, 0.9);
-        assert!((deg - 163.0).abs() < 1e-9, "deg={deg}");
-        assert!((conf - 0.8 * 0.9).abs() < 1e-12, "conf={conf}");
-        assert!(review, "conf 0.72 < tau 0.9 must review");
+        let d = combine_rotation(&features, &preds, 0.9);
+        assert!((d.rotation_deg - 163.0).abs() < 1e-9, "deg={}", d.rotation_deg);
+        assert!((d.confidence - 0.8 * 0.9).abs() < 1e-12, "conf={}", d.confidence);
+        assert!(d.needs_review, "conf 0.72 < tau 0.9 must review");
 
         // flip=1 -> rotation = 163 + 180 = 343.
         let preds = [1.0, 0.0, 0.0, 0.0, 0.0, 0.9, 1.0];
-        let (deg, conf, review) = combine_rotation(&features, &preds, 0.5);
-        assert!((deg - 343.0).abs() < 1e-9, "deg={deg}");
-        assert!((conf - 0.9).abs() < 1e-12, "conf={conf}");
-        assert!(!review, "conf 0.9 >= tau 0.5 and is_document");
+        let d = combine_rotation(&features, &preds, 0.5);
+        assert!((d.rotation_deg - 343.0).abs() < 1e-9, "deg={}", d.rotation_deg);
+        assert!((d.confidence - 0.9).abs() < 1e-12, "conf={}", d.confidence);
+        assert!(!d.needs_review, "conf 0.9 >= tau 0.5 and is_document");
 
         // Not a document -> review regardless of confidence.
         let preds = [0.1, 0.0, 0.0, 0.0, 0.0, 0.9, 1.0];
-        let (_, _, review) = combine_rotation(&features, &preds, 0.0);
-        assert!(review, "not is_document must force review");
+        let d = combine_rotation(&features, &preds, 0.0);
+        assert!(d.needs_review, "not is_document must force review");
 
         // axis exactly 0, flip=0 -> rotation = 0 (upright).
         features[RADON_AXIS_INDEX] = 0.0;
         let preds = [1.0, 0.0, 0.0, 0.0, 0.0, 0.1, 1.0];
-        let (deg, _, _) = combine_rotation(&features, &preds, 0.5);
-        assert!((deg - 0.0).abs() < 1e-9, "deg={deg}");
+        let d = combine_rotation(&features, &preds, 0.5);
+        assert!((d.rotation_deg - 0.0).abs() < 1e-9, "deg={}", d.rotation_deg);
     }
 
     const TRIVIAL_MANIFEST_V2: &str = r#"{

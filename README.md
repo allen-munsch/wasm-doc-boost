@@ -1,18 +1,18 @@
 # wasm-doc-boost
 
-Client-side document classification via Rust → WASM + GBDT inference. Seven GBDT labels — `is_document`, `is_digital`, `is_paper`, `is_crumpled`, `is_shadow`, `flip`, `trust` — plus a deterministic per-degree `rotation_deg` (radon axis + fold-snap + flip head). 116 handcrafted pixel-heuristic features, 1,080 XGBoost trees, 4.5 MB WASM (2.0 MB gzip), 2.3 MB model JSON (291 KB gzip). In-browser privacy, sub-millisecond model scoring.
+Client-side document classification via Rust → WASM + GBDT inference. Seven GBDT labels — `is_document`, `is_digital`, `is_paper`, `is_crumpled`, `is_shadow`, `flip`, `trust` — plus a deterministic per-degree `rotation_deg` (radon axis + fold-snap + glyph/vote flip gate). 124 handcrafted pixel-heuristic features, 1,080 XGBoost trees, 4.5 MB WASM (2.0 MB gzip), 2.7 MB model JSON (317 KB gzip). In-browser privacy, sub-millisecond model scoring.
 
 ![WASM size](https://img.shields.io/badge/wasm-4.5%20MB%20%7C%202.0%20MB%20gzip-blue)
-![Features](https://img.shields.io/badge/features-116-blue)
+![Features](https://img.shields.io/badge/features-124-blue)
 ![Trees](https://img.shields.io/badge/trees-1%2C080-blue)
-![Version](https://img.shields.io/badge/version-0.3.0-green)
-![Rotation](https://img.shields.io/badge/rotation-0.335%C2%B0%20axis%20MAE-brightgreen)
+![Version](https://img.shields.io/badge/version-0.4.0-green)
+![Rotation](https://img.shields.io/badge/rotation-1200%2F1200%20cardinal-brightgreen)
 
 ## Why This Exists
 
 Document classification usually requires sending images to a server. That means latency, bandwidth, and a privacy trade-off: someone else's hardware sees every document you classify.
 
-wasm-doc-boost runs entirely in the browser. A 4.5 MB WASM binary extracts 116 structural features from pixel data and scores them through a gradient-boosted decision tree ensemble — no GPU, no network, no inference server. The model JSON is 2.3 MB (291 KB gzip), so the whole classifier loads from a CDN in a couple of seconds on a typical connection, and the GBDT scoring itself takes well under a millisecond per image (end-to-end extraction + scoring is single-digit milliseconds at 512 px — see Performance).
+wasm-doc-boost runs entirely in the browser. A 4.5 MB WASM binary extracts 124 structural features from pixel data and scores them through a gradient-boosted decision tree ensemble — no GPU, no network, no inference server. The model JSON is 2.7 MB (317 KB gzip), so the whole classifier loads from a CDN in a couple of seconds on a typical connection, and the GBDT scoring itself takes well under a millisecond per image (end-to-end extraction + scoring is single-digit milliseconds at 512 px — see Performance).
 
 If you are building a client-side document scanner, an offline-capable PWA, a privacy-first OCR pipeline, or a browser extension that needs to know whether the current page contains a receipt versus a photo of a cat, this is the library you want.
 
@@ -34,10 +34,10 @@ import init, { load_model_v2, classify_file_v2, model_version } from './wasm_bri
 
 await init();
 
-// Load the v4 model manifest (XGBoost dump JSON: 7 heads + per-degree rotation)
+// Load the v3 manifest (XGBoost dump JSON: 7 heads + per-degree rotation)
 const resp = await fetch('model.json');
 load_model_v2(await resp.text());
-if (model_version() !== 4) throw new Error('expected model v4');
+if (model_version() !== '0.4.0') throw new Error('expected model 0.4.0');
 
 // Classify an image from a Uint8Array (PNG or JPEG)
 const fileBytes = await fs.readFile('scan.png');  // or file input, drop event, etc.
@@ -55,13 +55,13 @@ const result = classify_file_v2(fileBytes);
 ```bash
 # Prebuilt wheel (CPython 3.8+), no Rust toolchain required.
 # Linux x86_64:
-pip install https://github.com/allen-munsch/wasm-doc-boost/releases/download/v0.3.0/py_features-0.3.0-cp38-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
+pip install https://github.com/allen-munsch/wasm-doc-boost/releases/download/v0.4.0/py_features-0.4.0-cp38-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
 # Linux aarch64:
-pip install https://github.com/allen-munsch/wasm-doc-boost/releases/download/v0.3.0/py_features-0.3.0-cp38-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl
+pip install https://github.com/allen-munsch/wasm-doc-boost/releases/download/v0.4.0/py_features-0.4.0-cp38-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl
 # macOS Intel (x86_64):
-pip install https://github.com/allen-munsch/wasm-doc-boost/releases/download/v0.3.0/py_features-0.3.0-cp38-abi3-macosx_10_12_x86_64.whl
+pip install https://github.com/allen-munsch/wasm-doc-boost/releases/download/v0.4.0/py_features-0.4.0-cp38-abi3-macosx_10_12_x86_64.whl
 # macOS Apple Silicon (arm64):
-pip install https://github.com/allen-munsch/wasm-doc-boost/releases/download/v0.3.0/py_features-0.3.0-cp38-abi3-macosx_11_0_arm64.whl
+pip install https://github.com/allen-munsch/wasm-doc-boost/releases/download/v0.4.0/py_features-0.4.0-cp38-abi3-macosx_11_0_arm64.whl
 
 # Or build from source:
 cd crates/py-features && maturin develop --release
@@ -75,21 +75,23 @@ from PIL import Image
 img = Image.open("receipt.jpg").convert("RGB")
 pixels = np.array(img, dtype=np.uint8).tobytes()
 features = py_features.extract_all_v2(pixels, img.width, img.height)
-# features is a list[float] of 116 values
+# features is a list[float] of 124 values
 # (py_features.extract_all is the legacy 103-feature vector)
 
-# Same model + combine as the browser: load the v4 manifest and predict.
+# Same model + combine as the browser: load the v3 manifest and predict.
 py_features.load_model_v2(open("model.json").read())
 result = py_features.predict_v2(pixels, img.width, img.height)
 # result = {is_document, is_digital, is_paper, is_crumpled, is_shadow,
-#           flip, trust, rotation_deg, rotation_confidence, needs_review}
+#           flip, trust, rotation_deg, rotation_confidence, needs_review,
+#           flip_vote_count, flip_vote_agreement, axis_vote_count,
+#           axis_agreement, glyph_count, glyph_logodds}
 ```
 
 ### API
 
-- `load_model_v2(json)` — parses the v4 manifest `{labels, tau, version, trees, trees_per_label}`; 7-label multi-output GBDT (5 document traits + flip + trust)
-- `classify_file_v2(bytes)` — decodes PNG/JPEG, resizes to max 512 px long edge, extracts 116 features, runs the 7 heads, then combines the deterministic radon axis with the flip head into `rotation_deg` ∈ [0, 360), `rotation_confidence`, and `needs_review`
-- `model_version()` — the loaded manifest's `version` (4 for the current model; 0 for an unversioned manifest)
+- `load_model_v2(json)` — parses the v3 manifest `{labels, tau, version, trees, trees_per_label, confidence_calibration}`; 7-label multi-output GBDT (5 document traits + flip + trust)
+- `classify_file_v2(bytes)` — decodes PNG/JPEG, resizes to max 512 px long edge, extracts 124 features, runs the 7 heads, then combines the deterministic radon axis with the per-glyph/vote flip gate into `rotation_deg` ∈ [0, 360), `rotation_confidence`, and `needs_review`
+- `model_version()` — the loaded manifest's `version` (a release-tag string such as `"0.4.0"`; empty for an unversioned manifest)
 - `load_model(json)` / `classify_file(bytes)` — legacy 9-label API (`rotation_0/90/180/270`); kept for the old wheel, not used by the frontend
 - `scan_pii(text)` — rule-based + CRF PII scanner (credit cards, SSNs, emails, phones, addresses, names)
 
@@ -108,7 +110,7 @@ Image → [Tier 0: WASM GBDT] → decision
                                     → [Tier 2: GLM-OCR] (Tesseract struggles on these)
 ```
 
-**Tier 0 — WASM GBDT classifier** (sub-millisecond scoring, 4.5 MB WASM + 2.3 MB model download, costs nothing after load). Runs in the browser's main thread. Determines *what kind of image this is* before any OCR engine spins up. The 7 labels plus `rotation_deg` answer every routing question: Is this a document at all? Digital or paper? Rotated? Crumpled/shadowed (i.e., will Tesseract fail)? `rotation_deg` also tells the OCR tier which way to orient the image.
+**Tier 0 — WASM GBDT classifier** (sub-millisecond scoring, 4.5 MB WASM + 2.7 MB model download, costs nothing after load). Runs in the browser's main thread. Determines *what kind of image this is* before any OCR engine spins up. The 7 labels plus `rotation_deg` answer every routing question: Is this a document at all? Digital or paper? Rotated? Crumpled/shadowed (i.e., will Tesseract fail)? `rotation_deg` also tells the OCR tier which way to orient the image.
 
 **Tier 1 — Tesseract.js** (~500 ms–2 s in-browser, free, no network). Offline-capable, privacy-preserving, good enough for clean digital receipts and screenshots. The frontend automatically uses Tesseract for digital documents and falls through to Tier 2 for paper, crumpled, or shadowed images.
 
@@ -188,60 +190,68 @@ An earlier attempt ran GLM-OCR entirely client-side using ONNX Runtime Web + Web
 
 If ONNX Runtime Web adds JSEP kernels for `GatherBlockQuantized` on WebGPU, or if a float16 WebGPU-compatible export with smaller memory footprint becomes available, this path could replace the GPU backend entirely — bringing Tier 2 OCR client-side. The repo has everything else wired up (serve.py serves `.onnx` files with proper MIME types and no-cache headers, the importmap is ready, and the test harnesses validate the full cascade).
 
-## Model Performance (manifest v4, 116 features, 1,080 trees)
+## Model Performance (manifest v6, 124 features, 1,080 trees)
 
-Training: 152,800 samples (19,100 images × 8 random rotations) across 6 sources — FATURA2 digital receipts (52%), COCO natural images (26%), hard negatives (10%), CORD-v2 desk receipts (5%), synthetic variants (5%), SRD scanned receipts (1%). Rotations are continuous random degrees, so the axis and flip heads see the full circle rather than four cardinals. Split 80/10/10 train/cal/test grouped by base image — no data leak from rotation augmentation. XGBoost lr=0.1, depth 3–5 by head, 1,080 trees split unevenly across the seven heads (200/200/200/80/80/160/160). `data/model_v4.json` carries `version: 4`; the WASM `model_version()` export checks it.
+Training: 305,600 samples (19,100 images × 16 rotations: the 4 cardinals + 6 seeded-random flip pairs) across 6 sources — FATURA2 digital receipts (52%), COCO natural images (26%), hard negatives (10%), CORD-v2 desk receipts (5%), synthetic variants (5%), SRD scanned receipts (1%). Every non-cardinal sample has its exact 180° flip counterpart at the same axis, so the flip head sees matched upright/upside-down pairs. Split 80/10/10 train/cal/test grouped by FATURA2 template id (50 templates, recovered by `scripts/cluster_fatura_templates2.py`) where known, else by base image — whole templates stay together so shared fonts/layouts cannot leak across folds. XGBoost lr=0.1, depth 3–5 by head, 1,080 trees split unevenly across the seven heads (200/200/200/80/80/160/160). `data/model_v6.json` carries `version: "0.4.0"` — the release tag the model ships in, not a format counter; the WASM `model_version()` export returns it. The manifest also carries a 21-point isotonic `confidence_calibration` curve fitted on the cal split.
 
 **Headline results, measured on the shipped WASM build:**
 
-- **Per-degree rotation on clean born-digital documents: 100% within 1°** — 0/1,000 upright invoices mis-oriented, radon-axis circular MAE 0.335° (sub-degree).
-- **Perfect document/digital separation**: `is_document` AUC 0.9999, `is_digital` AUC 1.0000.
-- **Sub-millisecond GBDT scoring** from a 4.5 MB WASM + 2.3 MB model download (2.0 MB + 291 KB gzip).
+- **Per-degree rotation on clean born-digital documents**: 0/1,000 upright invoices flipped, 99.9% within 1° (the one miss is flagged for review), and 1,200/1,200 rotated-copy cardinals recovered exactly.
+- **Perfect document/digital separation**: `is_document` AUC 1.0000, `is_digital` AUC 1.0000.
+- **Sub-millisecond GBDT scoring** from a 4.5 MB WASM + 2.7 MB model download (2.0 MB + 317 KB gzip).
 
 ### Document Classification (5 trait heads)
 
-Held-out test split, `data/report_v5.json`:
+Held-out test split (33,744 samples); 5 document-trait heads of the 7 trained on `data/features_v6.npz`:
 
 | Label        | AUC    | F1     | Precision | Recall |
 |-------------|--------|--------|-----------|--------|
-| is_document | 0.9999 | 0.9974 | 0.9967    | 0.9980 |
+| is_document | 1.0000 | 0.9976 | 0.9984    | 0.9967 |
 | is_digital  | 1.0000 | 1.0000 | 1.0000    | 1.0000 |
-| is_paper    | 0.9998 | 0.9705 | 0.9518    | 0.9900 |
-| is_crumpled | 0.9840 | 0.4450 | 0.2987    | 0.8719 |
-| is_shadow   | 0.9913 | 0.5820 | 0.4354    | 0.8776 |
+| is_paper    | 0.9999 | 0.9830 | 0.9771    | 0.9890 |
+| is_crumpled | 0.9892 | 0.5558 | 0.3982    | 0.9195 |
+| is_shadow   | 0.9890 | 0.5315 | 0.3797    | 0.8856 |
 
-`is_document` and `is_digital` are near-perfect — structural properties visible in pixel statistics. `is_paper` is strong at 0.97 F1. Crumple and shadow are rare classes with extreme imbalance: the model catches most cases (recall 0.87 / 0.88) but produces false positives (precision 0.30 / 0.44). This is the right trade-off for a routing pre-filter — you would rather over-route to OCR than lose a crumpled receipt.
+`is_document` and `is_digital` are near-perfect — structural properties visible in pixel statistics. `is_paper` is strong at 0.98 F1. Crumple and shadow are rare classes with extreme imbalance: the model catches most cases (recall 0.92 / 0.89) but produces false positives (precision 0.40 / 0.38). This is the right trade-off for a routing pre-filter — you would rather over-route to OCR than lose a crumpled receipt.
 
 ### Rotation (per-degree: deterministic axis + GBDT flip/trust)
 
 Rotation is no longer four one-hot labels. It is a per-degree estimate in [0, 360):
 
-1. **Axis (deterministic radon)** — a 60-bin projection response curve at 3° resolution, parabolic-refined. On clean born-digital invoices the axis is sub-degree: benchmark circular MAE 0.335° (3 fatura2 docs × 18 angles).
+1. **Axis (deterministic radon)** — a 60-bin projection response curve at 3° resolution, parabolic-refined. The top-4 local maxima are each scored by text-line quality (n_lines, then total line ink) and the best wins, fixing near-ties where a perpendicular structure (table rule, page edge) out-peaks the text axis.
 2. **Fold-snap** — the axis is mod-180 blind: for exactly-horizontal text the argmax lands randomly on bin 0 (~0.01°) or bin 59 (~179.99°). `combine_rotation` snaps `<1° or >179°` to 0 before combining. (Before the fix, this one bug flipped 55% of upright invoices.)
-3. **Flip head (GBDT)** — ascender/descender textline evidence predicts 0 vs 180.
-4. **Trust head (GBDT)** — predicts P(axis within 1°); `rotation_confidence = trust × max(flip, 1−flip)`; `needs_review` when confidence < tau (0.9) or not a document.
-
-**Rotation by document type:**
-
-| Document type | Rotation result |
-|---|---|
-| Born-digital invoices (gold 0°) | **Solved**: 100% within 1°, 0/1,000 180° flips, axis MAE 0.335° |
-| Photographed / scanned documents | flip head held-out ~76% → routed to `needs_review` |
+3. **Flip gate (glyph + line-vote)** — at a cardinal axis the deterministic textline evidence is primary. When ≥8 glyphs voted, a per-glyph logistic classifier on 20×20 deskewed glyph crops (L2 logistic + page-level calibration on `(sum_logodds, glyph_count)`) decides 0-vs-180 — this is the only channel that works on all-caps/digit invoices where ascender/descender ink mass is ~0 and vote_frac is a coin flip. With fewer glyphs it falls back to the line-vote gate (≥5 lines, |vote_frac − 0.5| > 0.05). At non-cardinal axes the GBDT flip head decides.
+4. **Trust head (GBDT) + isotonic calibration** — `raw_confidence = trust × flip_conf`, then the manifest's 21-point isotonic curve maps it to an honest P(within 1°). `needs_review` fires when confidence < tau (0.9), not a document, or the glyph gate and GBDT flip head disagree.
 
 **Measured on the real WASM, gold upright FATURA2 (1,000 born-digital invoices, gold = 0°):**
 
 | Metric | Value |
 |---|---|
 | is_document | 1000 / 1000 |
-| axis (mod 180) within 1° | 100% |
-| rotation_deg within 1° | 100% |
+| rotation_deg within 1° | 99.9% (999 / 1000) |
 | 180°-flip errors | 0% (0 / 1000) |
-| needs_review | 0% |
+| needs_review | 0.1% (1 / 1000 — the single miss, flagged) |
 | mean confidence | 1.000 |
 
-The 0 flips come from a deterministic guard in `combine_rotation`, not from a better flip head. Before the fold-snap, 55% of upright invoices were flipped; after the snap the mod-180 axis was correct on every image but the GBDT flip head still guessed 180° on 6.5% of them (confidently wrong — mean confidence 0.976, only 3.6% flagged for review). The v4 guard closes that gap for born-digital documents: at a cardinal axis with ≥5 text lines, a digital document is only marked 180° when *all three* flip signals agree — ink body fraction above the x-height zone, a minority of text lines voting upright, and a strongly negative flip score; otherwise it stays 0°.
+**Measured on the real WASM, rotated copies (300 held-out fatura2 test images × 4 cardinals = 1,200):**
 
-Held-out flip head: ~76% accuracy, flip AUC 0.87, trust AUC 0.99. The head itself is unchanged; the guard overrides it on the born-digital path where the flip evidence is weakest. `rotation_deg` is now production-grade (0/1000 flip errors) for clean born-digital documents at cardinal axes. Photographed and scanned documents still route through the raw flip head and must be treated as needing review — PLAN.md Path B (quantized vision encoder) is the escalation for those.
+| Metric | Value |
+|---|---|
+| axis (mod 180) exact | 1200 / 1200 |
+| rotation_deg exact recovery | 1200 / 1200 |
+| 0° / 90° / 180° / 270° exact | 300/300 each |
+
+The 0 flip errors on born-digital invoices come from the deterministic flip gate, not a better flip head. At a cardinal axis the line-vote gate (or the per-glyph shape gate when ≥8 glyphs voted) overrides the GBDT flip head; the GBDT head alone is still ~76% accurate and is used off-cardinal. The per-glyph gate is the fix for the v0.3.0 gap: it works on all-caps/digit invoices where ascender/descender ink mass is ~0, so vote_frac was a coin flip there. When the glyph gate and the GBDT flip head disagree, the answer routes to `needs_review` rather than trusting the weaker per-glyph signal alone.
+
+Photographed and scanned documents still route through the GBDT flip head off-cardinal and must be treated as needing review — PLAN.md Path B (quantized vision encoder) is the escalation for those.
+
+### What changed in v0.4.0
+
+- **Retrained on a template-grouped split.** FATURA2's 50 shared templates previously leaked across train/cal/test when splitting by base image and inflated held-out numbers. `data/fatura2_template_ids.json` keeps whole templates together, so the split is honest.
+- **Per-glyph flip classifier.** A 20×20 logistic glyph classifier (weights baked into `crates/features-core/src/glyph.rs`) plus a page-level calibration on `(sum_logodds, glyph_count)` fixes 180° flips on all-caps/digit invoices where line-vote evidence is a coin flip. The gold upright set stays at 0 flip errors, now from real evidence rather than the v0.3.0 "all three signals agree" body-fraction guard, which is removed.
+- **Honest confidence.** A 21-point isotonic calibration curve ships in the manifest; `rotation_confidence` is now P(within 1°), not the raw `trust × flip_conf` product.
+- **Richer diagnostics.** `predict_v2` / `classify_file_v2` now return 16 keys — the 7 label probabilities plus `rotation_deg`, `rotation_confidence`, `needs_review`, `flip_vote_count`, `flip_vote_agreement`, `axis_vote_count`, `axis_agreement`, `glyph_count`, `glyph_logodds`.
+- **Version bump.** Workspace crates, the frontend package, and the Python wheel are now 0.4.0.
 
 ### What changed in v0.3.0
 
@@ -251,7 +261,7 @@ Held-out flip head: ~76% accuracy, flip AUC 0.87, trust AUC 0.99. The head itsel
 
 ### What changed vs the old 9-label model
 
-The four one-hot rotation labels (`rotation_0/90/180/270`, ~0.74 F1) are gone, replaced by the deterministic radon axis + `flip`/`trust` heads — sub-degree accuracy on clean digital documents instead of a 4-way guess. The feature vector grew from 103 to 116 (adds radon response summary, textline ascender/descender, boundary minAreaRect, docstrum axis).
+The four one-hot rotation labels (`rotation_0/90/180/270`, ~0.74 F1) are gone, replaced by the deterministic radon axis + `flip`/`trust` heads — sub-degree accuracy on clean digital documents instead of a 4-way guess. The feature vector grew from 103 to 124 (adds radon response summary, textline ascender/descender, boundary minAreaRect, docstrum axis, and 8 tranche-A/tranche-B flip features).
 
 ## Performance
 
@@ -272,7 +282,7 @@ Combined with Sobel-pass sharing (one `SobelResult` instead of seven independent
 
 ## Where It Fails (And Why)
 
-- **180° flips on photographed/scanned documents** — the flip head (ascender/descender heuristics) is the weak point there. On upright born-digital invoices the v4 guard in `combine_rotation` eliminated all 1,000/1,000 flip errors, but that guard only applies to digital documents at a cardinal axis with enough text lines. Photographed and scanned documents still route through the raw flip head (held-out ~76% accuracy), and `needs_review` does not catch all of them because the head is confidently wrong. Path B (vision encoder) is the planned fix.
+- **180° flips on photographed/scanned documents** — the flip head (ascender/descender heuristics) is the weak point there. On upright born-digital invoices the glyph/vote gate eliminates all 1,000/1,000 flip errors, but that gate only applies at a cardinal axis. Photographed and scanned documents still route through the raw flip head (held-out ~76% accuracy) off-cardinal, and `needs_review` does not catch all of them because the head is confidently wrong. Path B (vision encoder) is the planned fix.
 - **Photographed crumpled paper** — illumination gradients look like shadows to the Sobel-based features. The edge-density and Otsu-threshold features can't distinguish a fold from vignetting. Solution: more training data, not more features.
 - **Heavy perspective distortion** — the model sees rotation as a 2D image-plane property. If the document is photographed at a 45° angle, the rotation label may be wrong even though the "true" text direction is correct. Perspective correction should happen upstream.
 - **Crumple precision** — 30% precision means most images flagged as crumpled are actually flat. This is acceptable for a pre-filter that prompts re-scanning but not for automated rejection.
@@ -280,7 +290,7 @@ Combined with Sobel-pass sharing (one `SobelResult` instead of seven independent
 
 ## Feature Taxonomy
 
-Every feature is computed from raw pixel data — no deep learning, no learned embeddings, no external dependencies beyond `libm` for `no_std` math. This is deliberate: the same Rust code runs identically in the browser (WASM), in Python via PyO3, and in standalone binaries. The canonical vector is `extract_all_v2`: 116 features = 100 core heuristics + 16 rotation signals.
+Every feature is computed from raw pixel data — no deep learning, no learned embeddings, no external dependencies beyond `libm` for `no_std` math. This is deliberate: the same Rust code runs identically in the browser (WASM), in Python via PyO3, and in standalone binaries. The canonical vector is `extract_all_v2`: 124 features = 100 core heuristics + 24 rotation signals.
 
 ### Color (5 features)
 
@@ -318,9 +328,9 @@ Grayscale row/column projection variance, variance ratio, and row/column entropy
 
 Ink coverage (fraction of pixels below Otsu threshold), mean ink intensity, horizontal and vertical run-length statistics (mean, std, entropy), and a Docstrum-inspired nearest-neighbor rotation angle. Run-length entropy is the key differentiator: text has a characteristic bimodal run-length distribution (character strokes ~3-5 px, word gaps ~10-20 px), while photos have nearly uniform run lengths. The Docstrum angle links each ink pixel to its nearest neighbor in the row below and computes the circular mean of those angles — horizontal text lines produce angles near ±π/2, rotated text shifts them.
 
-### Rotation Signals (16 features) — the per-degree rework
+### Rotation Signals (24 features) — the per-degree rework
 
-Radon response curve summary (best axis, peakiness, peak margin, concentration — the deterministic axis lives at feature index 100), textline ascender/descender mass + line-vote fraction (the flip head's evidence), boundary minimum-area-rectangle axis vote (visible-boundary complement to the radon axis), and an unfolded Docstrum axis. The taxonomy above is a representative selection of the 116, not an exhaustive list.
+Radon response curve summary (best axis, peakiness, peak margin, concentration — the deterministic axis lives at feature index 100), textline ascender/descender mass + line-vote fraction (the flip head's evidence), boundary minimum-area-rectangle axis vote (visible-boundary complement to the radon axis), an unfolded Docstrum axis, and 8 tranche-A/tranche-B flip features (signed vertical gradient, baseline edge weight, gradient skew, top/bottom edge sharpness, character centroid offset, top-heavy fraction, asymmetry strength, body vertical bias). The taxonomy above is a representative selection of the 124, not an exhaustive list.
 
 ## Build
 

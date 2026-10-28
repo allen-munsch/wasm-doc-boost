@@ -48,9 +48,10 @@ export function load_model(json: string): void;
 export function load_model_v2(json: string): void;
 
 /**
- * Manifest version of the loaded model (0 when unset or not loaded).
+ * Release-tag version of the loaded model (empty string when unset or not
+ * loaded). Matches the tag the model.json was built for, e.g. "0.4.0".
  */
-export function model_version(): number;
+export function model_version(): string;
 
 /**
  * Scan text for PII/PCI (credit card numbers, SSNs, emails, phones).
@@ -71,7 +72,7 @@ export interface InitOutput {
     readonly load_crf_model: (a: number, b: number) => [number, number];
     readonly load_model: (a: number, b: number) => [number, number];
     readonly load_model_v2: (a: number, b: number) => [number, number];
-    readonly model_version: () => number;
+    readonly model_version: () => [number, number];
     readonly scan_pii: (a: number, b: number) => [number, number, number];
     readonly classifyPdf: (a: number, b: number) => [number, number, number];
     readonly extractTextWithPositions: (a: number, b: number) => [number, number, number];
@@ -81,6 +82,7 @@ export interface InitOutput {
     readonly __externref_table_alloc: () => number;
     readonly __wbindgen_externrefs: WebAssembly.Table;
     readonly __externref_table_dealloc: (a: number) => void;
+    readonly __wbindgen_free: (a: number, b: number, c: number) => void;
     readonly __wbindgen_start: () => void;
 }
 

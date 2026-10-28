@@ -43,7 +43,9 @@ mod engines;
 
 use std::sync::Mutex;
 
-use gbdt_core::{combine_rotation, ModelManifest, DEFAULT_TAU, LABELS_V2};
+use gbdt_core::{
+    combine_rotation_calibrated, GlyphEvidence, ModelManifest, DEFAULT_TAU, LABELS_V2,
+};
 use pdf_inspector_core::{types::ItemType, PdfType};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
@@ -131,6 +133,54 @@ fn extract_all_v2(pixels: Vec<u8>, width: usize, height: usize) -> PyResult<Vec<
     }
 
     Ok(features_core::extract_all_v2(&pixels, width, height))
+}
+
+/// Extract per-glyph 20x20 ink-density crops from the best-axis deskew.
+/// Training input for scripts/train_glyph_classifier.py: call on an upright
+/// image for label 0 and on its 180-rotated RGB for label 1.
+///
+/// * pixels: `bytes` — RGB bytes (length must equal width × height × 3)
+/// * Returns: `list[list[float]]` — one 400-float row-major crop per glyph.
+#[pyfunction]
+fn extract_glyph_crops(pixels: Vec<u8>, width: usize, height: usize) -> PyResult<Vec<Vec<f32>>> {
+    let expected = width * height * 3;
+    if pixels.len() != expected {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "Expected {} bytes ({}x{}x3), got {}",
+            expected,
+            width,
+            height,
+            pixels.len()
+        )));
+    }
+    let gray = features_core::to_grayscale(&pixels, width, height);
+    let rot = features_core::rotation_extract(&gray, &pixels, width, height);
+    let mut out = Vec::with_capacity(rot.glyph_count);
+    for c in rot.glyph_crops.chunks_exact(features_core::glyph::GLYPH_DIM) {
+        out.push(c.to_vec());
+    }
+    Ok(out)
+}
+
+/// Extract page-level per-glyph flip evidence: `(sum_logodds, glyph_count)`.
+/// Positive sum_logodds = flipped, negative = upright. Diagnostic twin of the
+/// channel that combine_rotation uses when enough glyphs voted.
+#[pyfunction]
+fn extract_glyph_logodds(pixels: Vec<u8>, width: usize, height: usize) -> PyResult<(f64, f64)> {
+    let expected = width * height * 3;
+    if pixels.len() != expected {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "Expected {} bytes ({}x{}x3), got {}",
+            expected,
+            width,
+            height,
+            pixels.len()
+        )));
+    }
+    let gray = features_core::to_grayscale(&pixels, width, height);
+    let rot = features_core::rotation_extract(&gray, &pixels, width, height);
+    let (sum_logodds, count) = features_core::glyph::glyph_logodds_from_crops(&rot.glyph_crops);
+    Ok((sum_logodds, count as f64))
 }
 
 /// Debug helper for the rotation rework: radon curve + textline line-quality
@@ -357,15 +407,16 @@ fn load_model_v2(json: &str) -> PyResult<()> {
     Ok(())
 }
 
-/// Manifest version of the loaded model (0 when unset or not loaded).
+/// Release-tag version of the loaded model (empty string when unset or not
+/// loaded). Matches the tag the model.json was built for, e.g. "0.4.0".
 #[pyfunction]
-fn model_version() -> u32 {
+fn model_version() -> String {
     MODEL_V2
         .lock()
         .unwrap()
         .as_ref()
-        .and_then(|m| m.version)
-        .unwrap_or(0)
+        .and_then(|m| m.version.clone())
+        .unwrap_or_default()
 }
 
 /// Score the 7 heads on raw RGB pixels and combine the deterministic radon
@@ -397,32 +448,58 @@ fn predict_v2(pixels: Vec<u8>, width: usize, height: usize) -> PyResult<Py<PyAny
         })?
     };
 
-    let features = features_core::extract_all_v2(&pixels, width, height);
+    let (features, glyph_logodds, glyph_count) =
+        features_core::extract_all_v2_with_glyph(&pixels, width, height);
     let preds = manifest.model.predict(&features);
     let tau = if manifest.tau.is_finite() && manifest.tau > 0.0 {
         manifest.tau
     } else {
         DEFAULT_TAU
     };
-    let (rotation_deg, rotation_confidence, needs_review) =
-        combine_rotation(&features, &preds, tau);
+    let d = combine_rotation_calibrated(
+        &features,
+        &preds,
+        tau,
+        manifest.confidence_calibration.as_deref(),
+        Some(GlyphEvidence {
+            sum_logodds: glyph_logodds,
+            count: glyph_count,
+        }),
+    );
 
     Python::attach(|py| {
         let dict = PyDict::new(py);
         for (label, &pred) in manifest.labels.iter().zip(preds.iter()) {
             dict.set_item(label.as_str(), pred)?;
         }
-        dict.set_item("rotation_deg", rotation_deg)?;
-        dict.set_item("rotation_confidence", rotation_confidence)?;
-        dict.set_item("needs_review", needs_review)?;
+        dict.set_item("rotation_deg", d.rotation_deg)?;
+        dict.set_item("rotation_confidence", d.confidence)?;
+        dict.set_item("needs_review", d.needs_review)?;
+        dict.set_item("flip_vote_count", d.flip_vote_count)?;
+        dict.set_item("flip_vote_agreement", d.flip_vote_agreement)?;
+        dict.set_item("axis_vote_count", d.axis_vote_count)?;
+        dict.set_item("axis_agreement", d.axis_agreement)?;
+        dict.set_item("glyph_count", d.glyph_count)?;
+        dict.set_item("glyph_logodds", d.glyph_logodds)?;
         Ok(dict.unbind().into_any())
     })
 }
 
 /// Expose the raw combine step for diagnostics and parity checks.
 #[pyfunction]
-fn combine_rotation_v2(features: Vec<f64>, preds: Vec<f64>, tau: f64) -> (f64, f64, bool) {
-    combine_rotation(&features, &preds, tau)
+fn combine_rotation_v2(features: Vec<f64>, preds: Vec<f64>, tau: f64) -> PyResult<Py<PyAny>> {
+    let d = combine_rotation_calibrated(&features, &preds, tau, None, None);
+    Python::attach(|py| {
+        let dict = PyDict::new(py);
+        dict.set_item("rotation_deg", d.rotation_deg)?;
+        dict.set_item("rotation_confidence", d.confidence)?;
+        dict.set_item("needs_review", d.needs_review)?;
+        dict.set_item("flip_vote_count", d.flip_vote_count)?;
+        dict.set_item("flip_vote_agreement", d.flip_vote_agreement)?;
+        dict.set_item("axis_vote_count", d.axis_vote_count)?;
+        dict.set_item("axis_agreement", d.axis_agreement)?;
+        Ok(dict.unbind().into_any())
+    })
 }
 
 /// `py_features` — feature extraction, v3 GBDT prediction, PDF inspection,
@@ -442,6 +519,8 @@ fn combine_rotation_v2(features: Vec<f64>, preds: Vec<f64>, tau: f64) -> (f64, f
 fn py_features(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(extract_all, m)?)?;
     m.add_function(wrap_pyfunction!(extract_all_v2, m)?)?;
+    m.add_function(wrap_pyfunction!(extract_glyph_crops, m)?)?;
+    m.add_function(wrap_pyfunction!(extract_glyph_logodds, m)?)?;
     m.add_function(wrap_pyfunction!(load_rgb_resized, m)?)?;
     m.add_function(wrap_pyfunction!(rotation_diagnostic, m)?)?;
     m.add_function(wrap_pyfunction!(classify_pdf, m)?)?;

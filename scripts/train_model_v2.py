@@ -3,8 +3,10 @@
 
 Input:  features npz from `export_parallel.py --v2` (116 features, 7 labels,
         plus rotation_deg metadata).
-Output: model.json (v4 manifest `{labels, tau, version, trees, trees_per_label}`,
-        7 heads: 5 doc traits + flip + trust), report.json.
+Output: model.json (manifest `{labels, tau, version, trees, trees_per_label}`
+        where `version` is the release tag string this model ships in —
+        e.g. "0.4.0", matching package.json/Cargo.toml — not a format
+        counter; 7 heads: 5 doc traits + flip + trust), report.json.
 
 Rotation is NOT a GBDT head: the axis is the deterministic radon feature
 (index 100). The GBDT only predicts flip (P(flip)) and trust
@@ -28,6 +30,7 @@ from typing import Any
 
 import numpy as np
 import xgboost as xgb
+from sklearn.isotonic import IsotonicRegression
 from sklearn.metrics import precision_recall_fscore_support, roc_auc_score
 from sklearn.model_selection import GroupShuffleSplit
 
@@ -42,6 +45,11 @@ LABEL_NAMES = [
 ]
 RADON_AXIS_INDEX = 100
 TRUST_TOLERANCE_DEG = 1.0
+VOTE_FRAC_INDEX = 105
+N_LINES_INDEX = 106
+FLIP_NLINES_MIN = 5.0
+VOTE_TIE_EPS = 0.05
+CALIBRATION_GRID = 21
 
 BASE_PARAMS: dict[str, Any] = {
     "max_depth": 5,
@@ -101,15 +109,46 @@ def load_data(npz_path: str):
     return X, y, filenames, rotation_deg
 
 
+TEMPLATE_IDS_PATH = "data/fatura2_template_ids.json"
+
+
+def _template_groups(filenames):
+    """Group by FATURA2 template id where known, else by base image.
+
+    GroupShuffleSplit holds whole groups together, so CV folds never mix
+    instances of one template across train/cal/test. The 50 FATURA2 templates
+    share fonts and layouts; splitting by base image leaks them across folds
+    and inflates held-out numbers."""
+    import json
+    from pathlib import Path
+
+    tmap = None
+    if Path(TEMPLATE_IDS_PATH).exists():
+        with open(TEMPLATE_IDS_PATH) as f:
+            tmap = json.load(f)
+    groups = []
+    for f in filenames:
+        base = base_filename(str(f))
+        key = base.split("/")[-1]  # fatura2/fatura2_train_0.jpg -> fatura2_train_0.jpg
+        if tmap and key in tmap:
+            groups.append(f"tpl{tmap[key]:02d}")
+        else:
+            groups.append(base)
+    return np.array(groups)
+
+
 def split_groups(X, y, filenames, rotation_deg):
-    groups = np.array([base_filename(f) for f in filenames])
+    groups = _template_groups(filenames)
     gss1 = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
     train_idx, rest_idx = next(gss1.split(X, groups=groups))
     gss2 = GroupShuffleSplit(n_splits=1, test_size=0.5, random_state=43)
     cal_idx, test_idx = next(gss2.split(rest_idx, groups=groups[rest_idx]))
     cal_idx, test_idx = rest_idx[cal_idx], rest_idx[test_idx]
     print(
-        f"Train: {len(train_idx)}, Cal: {len(cal_idx)}, Test: {len(test_idx)} (by base image)"
+        f"Train: {len(train_idx)} ({len(set(groups[train_idx]))} groups), "
+        f"Cal: {len(cal_idx)} ({len(set(groups[cal_idx]))} groups), "
+        f"Test: {len(test_idx)} ({len(set(groups[test_idx]))} groups) "
+        f"(grouped by template where known, else base image)"
     )
     return train_idx, cal_idx, test_idx
 
@@ -149,6 +188,44 @@ def predict(models, X):
     return [m.predict_proba(X)[:, 1] for m in models]
 
 
+def combine_rotation_py(X, preds, calibration=None):
+    """Mirror gbdt-core `combine_rotation_calibrated` exactly (v5 vote gate,
+    fold-snap, counts/agreements) so the report numbers match shipped
+    inference bit-for-bit.
+
+    Returns (rot_pred, conf, flip_vote_count, flip_vote_agreement).
+    `conf` is the calibrated confidence when a 21-value isotonic curve is
+    passed, else the raw trust*flip_conf product.
+    """
+    axis_deg = np.degrees(X[:, RADON_AXIS_INDEX]) % 180.0
+    axis_deg = np.where((axis_deg < 1.0) | (axis_deg > 179.0), 0.0, axis_deg)
+
+    flip_p = preds[5]
+    trust_p = preds[6]
+    vote_frac = X[:, VOTE_FRAC_INDEX]
+    n_lines = X[:, N_LINES_INDEX]
+
+    cardinal = (axis_deg == 0.0) | (np.abs(axis_deg - 90.0) < 1.0)
+    margin = np.abs(vote_frac - 0.5)
+    vote_conf = np.clip((margin - VOTE_TIE_EPS) / (0.5 - VOTE_TIE_EPS), 0.0, 1.0)
+    head_conf = np.maximum(flip_p, 1.0 - flip_p)
+
+    use_vote = cardinal & (n_lines >= FLIP_NLINES_MIN) & (margin > VOTE_TIE_EPS)
+    flip = np.where(use_vote, (vote_frac < 0.5).astype(float), (flip_p >= 0.5).astype(float))
+    flip_conf = np.where(use_vote, vote_conf, head_conf)
+
+    rot_pred = ((180.0 - axis_deg) % 180.0) + 180.0 * flip
+    raw_conf = trust_p * flip_conf
+    if calibration is not None:
+        grid = np.linspace(0.0, 1.0, len(calibration))
+        conf = np.interp(raw_conf, grid, calibration)
+    else:
+        conf = raw_conf
+    flip_vote_count = n_lines
+    flip_vote_agreement = np.maximum(vote_frac, 1.0 - vote_frac)
+    return rot_pred, conf, flip_vote_count, flip_vote_agreement
+
+
 def circular_err(a, b, period=360.0):
     d = np.abs(a - b)
     return np.minimum(d, period - d)
@@ -170,14 +247,17 @@ def source_down_by_base(filenames, y):
     return np.array([src_down[b] for b in base])
 
 
-def rotation_metrics(X, y, rotation_deg, P, tag, filenames=None):
+def rotation_metrics(X, y, rotation_deg, P, tag, filenames=None, calibration=None):
+    rot_pred, conf, flip_vote_count, flip_vote_agreement = combine_rotation_py(
+        X, P, calibration
+    )
     axis_deg = np.degrees(X[:, RADON_AXIS_INDEX]) % 180.0
-    flip_p = P[5]
+    axis_deg = np.where((axis_deg < 1.0) | (axis_deg > 179.0), 0.0, axis_deg)
+    flip_pred = (rot_pred >= 180.0).astype(int)
     trust_p = P[6]
-    flip_pred = (flip_p >= 0.5).astype(int)
+    flip_p = P[5]
     # axis is the radon line direction mod 180 = -applied_angle mod 180,
     # so the applied angle is (180 - axis) mod 180 plus 180 when flipped.
-    rot_pred = ((180.0 - axis_deg) % 180.0) + 180.0 * flip_pred
     # True content rotation: applied angle + 180 if the source is stored
     # upside down (the corrected flip label carries that orientation).
     src_down = (
@@ -202,6 +282,8 @@ def rotation_metrics(X, y, rotation_deg, P, tag, filenames=None):
         "flip_accuracy": float(np.mean(flip_pred == y[:, 5])),
         "trust_auc": float(roc_auc_score(y[:, 6], trust_p)),
         "flip_auc": float(roc_auc_score(y[:, 5], flip_p)),
+        "mean_flip_vote_count": float(np.mean(flip_vote_count)),
+        "mean_flip_vote_agreement": float(np.mean(flip_vote_agreement)),
     }
     print(f"\n=== Rotation metrics [{tag}] ===")
     for k, v in out.items():
@@ -230,13 +312,15 @@ def trait_metrics(y, P, tag):
     return metrics
 
 
-def calibrate_tau(X_cal, y_cal, rotation_cal, P_cal, filenames_cal=None):
-    """Sweep tau over combined confidence = trust * max(flip, 1-flip)."""
-    axis_deg = np.degrees(X_cal[:, RADON_AXIS_INDEX]) % 180.0
-    flip_p = P_cal[5]
-    trust_p = P_cal[6]
-    flip_pred = (flip_p >= 0.5).astype(int)
-    rot_pred = ((180.0 - axis_deg) % 180.0) + 180.0 * flip_pred
+def calibrate_confidence(X_cal, y_cal, rotation_cal, P_cal, filenames_cal=None):
+    """Fit an isotonic calibration curve raw_conf -> P(rotation within 1 deg)
+    and sweep tau over the CALIBRATED confidence.
+
+    The curve is exported into the manifest and applied by gbdt-core's
+    `calibrate_confidence`, so `rotation_confidence` is an honest probability,
+    not the raw trust*flip_conf product.
+    """
+    rot_pred, raw_conf, _, _ = combine_rotation_py(X_cal, P_cal, None)
     src_down = (
         source_down_by_base(filenames_cal, y_cal)
         if filenames_cal is not None
@@ -244,10 +328,16 @@ def calibrate_tau(X_cal, y_cal, rotation_cal, P_cal, filenames_cal=None):
     )
     true_rot = (rotation_cal + 180.0 * src_down) % 360.0
     err = circular_err(rot_pred, true_rot)
-    conf = trust_p * np.maximum(flip_p, 1.0 - flip_p)
+    correct = (err <= 1.0).astype(float)
+
+    iso = IsotonicRegression(out_of_bounds="clip", y_min=0.0, y_max=1.0)
+    iso.fit(raw_conf, correct)
+    grid = np.linspace(0.0, 1.0, CALIBRATION_GRID)
+    curve = iso.predict(grid).tolist()
+    conf = np.interp(raw_conf, grid, np.asarray(curve))
 
     rows = []
-    print("\n=== Tau sweep (cal) ===")
+    print("\n=== Tau sweep (cal, calibrated confidence) ===")
     for tau in np.arange(0.0, 1.001, 0.05):
         tau_f = float(tau)
         attempted = conf >= tau
@@ -284,28 +374,29 @@ def calibrate_tau(X_cal, y_cal, rotation_cal, P_cal, filenames_cal=None):
     for r in rows:
         if r["accepted_flip_rate"] <= 0.001 and r["review_rate"] <= 0.20:
             chosen = r
-    return rows, chosen
+    return rows, chosen, curve
 
 
-def export_merged_model(models, output_path, tau):
+def export_merged_model(models, output_path, tau, calibration=None):
     all_trees = []
     trees_per_label = []
     for model in models:
         tree_dump = model.get_booster().get_dump(dump_format="json")
         all_trees.extend([json.loads(t)] for t in tree_dump)
         trees_per_label.append(len(tree_dump))
-    # v4 manifest: labels + pinned operating point + tree forest + exact
+    # Manifest: labels + pinned operating point + tree forest + exact
     # per-label tree counts. The seven heads use uneven n_estimators
     # (200/200/200/80/80/160/160), so wasm-bridge must NOT split `trees`
-    # evenly; trees_per_label tells it the exact boundaries. `version: 4`
-    # gates the fold-snap combine AND the deterministic textline flip gate
-    # in wasm-bridge (model_version()).
+    # evenly; trees_per_label tells it the exact boundaries. `version` is the
+    # release tag string this model ships in, not a format counter — keep it
+    # in lockstep with package.json/Cargo.toml when cutting a release.
     manifest = {
         "labels": LABEL_NAMES,
         "tau": tau,
-        "version": 4,
+        "version": "0.4.0",
         "trees": all_trees,
         "trees_per_label": trees_per_label,
+        "confidence_calibration": calibration,
     }
     with open(output_path, "w") as f:
         json.dump(manifest, f)
@@ -363,11 +454,12 @@ def main():
         ),
     }
 
-    rows, chosen = calibrate_tau(
+    rows, chosen, calibration = calibrate_confidence(
         X[cal_idx], y[cal_idx], rotation_deg[cal_idx], P_cal, filenames[cal_idx]
     )
     report["tau_sweep"] = rows
     report["chosen_tau"] = chosen
+    report["confidence_calibration"] = calibration
     if chosen is not None:
         print(
             f"\nChosen tau = {chosen['tau']:.2f} "
@@ -386,7 +478,7 @@ def main():
         )
     report["pinned_tau"] = pinned_tau
 
-    export_merged_model(models, args.output, pinned_tau)
+    export_merged_model(models, args.output, pinned_tau, calibration)
 
     if args.report:
         with open(args.report, "w") as f:

@@ -13,3 +13,12 @@ pdf-inspector/
 paddleocr-rs/
 gliner2-rs/
 pp-doclayout/
+
+# upstream research clones (layout/ocr experiments; never commit)
+laya/
+lev/
+
+# operator feedback artifacts and stray patches
+wasm-doc-boost-0.3.0-feedback/
+wasm-doc-boost-0.3.0-feedback.zip
+*.patch

@@ -16,8 +16,8 @@ const { initSync, classify_file_v2, load_model_v2, model_version } = await impor
   resolve(ROOT, 'frontend/wasm_bridge.js')
 );
 initSync(new WebAssembly.Module(wasmBytes));
-load_model_v2(readFileSync(resolve(ROOT, 'data/model_v4.json'), 'utf-8'));
-if (model_version() !== 4) throw new Error(`expected model v4, got ${model_version()}`);
+load_model_v2(readFileSync(resolve(ROOT, 'data/model_v6.json'), 'utf-8'));
+if (model_version() !== '0.4.0') throw new Error(`expected model 0.4.0, got ${model_version()}`);
 
 function circularErr(a, b, period = 360) {
   const d = Math.abs(a - b);
