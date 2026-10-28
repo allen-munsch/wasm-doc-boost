@@ -278,6 +278,34 @@ Held-out test split (56,800 samples); 5 document-trait heads of the 7 trained on
 
 `is_document` and `is_digital` are near-perfect — structural properties visible in pixel statistics. `is_paper` is strong at 0.99 F1. Crumple and shadow are rare classes with extreme imbalance: crumple recall is strong (0.80) with far better precision than v0.4.0 (0.74 vs 0.40); shadow remains the harder call (recall 0.53, precision 0.55). This is the right trade-off for a routing pre-filter — you would rather over-route to OCR than lose a crumpled receipt.
 
+### Routing accuracy by source (the point of the classifier)
+
+The seven heads exist to make one routing decision per image: **discard** (not a document), **Tesseract** (clean born-digital), or **escalate to a VLM** (photographed/scanned paper, crumpled/shadow). Held-out test split (56,800 samples), shipped per-label thresholds:
+
+| Source | n | true tier | → discard | → Tesseract | → VLM |
+|---|---|---|---|---|---|
+| fatura2 (born-digital receipts) | 28,800 | Tesseract | 0 | **28,800 (100%)** | 0 |
+| coru (photographed receipts) | 13,824 | VLM | 688 (5%) | 8 (<1%) | **13,128 (95%)** |
+| cord-v2 (desk receipts) | 1,328 | VLM | 38 (3%) | 0 | **1,290 (97%)** |
+| srd (scanned receipts) | 256 | VLM | 6 (2%) | 0 | **250 (98%)** |
+| variants (synthetic) | 1,456 | VLM | 25 (2%) | 0 | **1,431 (98%)** |
+| coco (natural images) | 8,032 | discard | **7,886 (98%)** | 0 | 146 (2%) |
+| negatives (hard negatives) | 3,104 | discard | **3,104 (100%)** | 0 | 0 |
+
+Clean born-digital documents route to Tesseract 100% of the time; photographed/scanned paper routes to a VLM 95–98% of the time; non-documents are discarded 98–100% of the time. The few misroutes are conservative (paper → discard) or negligible (0.06% paper → Tesseract).
+
+### Rotation by source (rotation only has to be right for the Tesseract tier)
+
+| Source | n docs | ±1° | flip acc | circular MAE | needs_review | mean conf |
+|---|---|---|---|---|---|---|
+| fatura2 (born-digital) | 28,800 | 81.3% | 88.2% | 22.4° | 73.4% | 0.718 |
+| coru (photographed) | 13,824 | 10.0% | 56.3% | 85.6° | 99.5% | 0.110 |
+| cord-v2 (desk) | 1,328 | 6.7% | 55.0% | 87.3° | 100% | 0.082 |
+| srd (scanned) | 256 | 8.6% | 50.8% | 82.4° | 100% | 0.091 |
+| variants (synthetic) | 1,456 | 6.0% | 58.0% | 88.1° | 100% | 0.069 |
+
+The rotation estimator only commits on born-digital documents, where the axis is well-defined; photographed/scanned paper has intrinsic tilt, so those route to `needs_review` (~100%) and the VLM handles orientation. That is the deliberate trade: rotation accuracy is bought where Tesseract needs it (fatura2), and handed off to a beefier model everywhere else.
+
 ### Rotation (per-degree: deterministic axis + GBDT flip/trust)
 
 Rotation is no longer four one-hot labels. It is a per-degree estimate in [0, 360):
