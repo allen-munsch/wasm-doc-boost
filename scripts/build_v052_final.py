@@ -47,6 +47,8 @@ def main():
 
     X, y, filenames, rot = t.load_data(args.features)
     train_idx, cal_idx, test_idx = t.split_groups(X, y, filenames, rot)
+    is_to = np.asarray(['textonly' in f for f in filenames])
+    train_noto = train_idx[~is_to[train_idx]]
 
     d = np.load(args.doclaynet, allow_pickle=True)
     Xd = d['features'].astype(np.float64); yd = d['labels'].astype(np.int8)

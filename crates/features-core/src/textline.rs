@@ -79,6 +79,40 @@ fn rotate_gray_square(gray: &[f64], width: usize, height: usize, deg: f64) -> (V
         }
     }
 
+    // C4: exact multiples of 90 need no resampling — bilinear blurs strokes
+    // even at exactly 90/270 deg (weaker glyph evidence on sideways pages).
+    let d = deg % 360.0;
+    let d = if d < 0.0 { d + 360.0 } else { d };
+    let r90 = libm::round(d / 90.0) as i32;
+    if (d - r90 as f64 * 90.0).abs() < 1e-9 {
+        let mut out = alloc::vec![255.0f64; size * size];
+        match r90.rem_euclid(4) {
+            0 => out.copy_from_slice(&padded),
+            1 => {
+                for y in 0..size {
+                    for x in 0..size {
+                        out[y * size + x] = padded[x * size + (size - 1 - y)];
+                    }
+                }
+            }
+            2 => {
+                for y in 0..size {
+                    for x in 0..size {
+                        out[y * size + x] = padded[(size - 1 - y) * size + (size - 1 - x)];
+                    }
+                }
+            }
+            _ => {
+                for y in 0..size {
+                    for x in 0..size {
+                        out[y * size + x] = padded[(size - 1 - x) * size + y];
+                    }
+                }
+            }
+        }
+        return (out, size);
+    }
+
     let rad = deg.to_radians();
     let sin_t = libm::sin(rad);
     let cos_t = libm::cos(rad);
