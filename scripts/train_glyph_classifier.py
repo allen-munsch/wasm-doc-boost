@@ -106,6 +106,29 @@ def load_all(images, jobs=1):
     return out
 
 
+def tilt_augment(X, y, angles=(0.5, 1.0)):
+    """Small-rotation + blur augmentation; same label. The fold deskew leaves
+    a sub-degree residual that the cardinal-only classifier has never seen.
+    Gaussian blur simulates the bilinear resample's smoothing (the sign flips
+    are as much blur as rotation); small rotations cover the residual tilt."""
+    from scipy.ndimage import gaussian_filter, rotate as ndi_rotate
+    grids = X.reshape(-1, 20, 20)
+    Xs, ys = [X], [y]
+    for sigma in (0.5, 1.0):
+        bl = np.stack([gaussian_filter(g, sigma, mode="constant", cval=0.0) for g in grids])
+        Xs.append(bl.reshape(-1, 400))
+        ys.append(y)
+    for a in angles:
+        for sgn in (+1.0, -1.0):
+            rot = np.stack([
+                ndi_rotate(g, sgn * a, reshape=False, order=1, mode="constant", cval=0.0)
+                for g in grids
+            ])
+            Xs.append(rot.reshape(-1, 400))
+            ys.append(y)
+    return np.concatenate(Xs, axis=0), np.concatenate(ys, axis=0)
+
+
 def build_glyph_dataset(image_crops, paths, cap_glyphs):
     Xs, ys = [], []
     for p in paths:
@@ -119,6 +142,7 @@ def build_glyph_dataset(image_crops, paths, cap_glyphs):
     if cap_glyphs and len(X) > cap_glyphs:
         idx = np.random.RandomState(0).choice(len(X), cap_glyphs, replace=False)
         X, y = X[idx], y[idx]
+    X, y = tilt_augment(X, y)
     return X, y
 
 

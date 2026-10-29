@@ -470,7 +470,7 @@ def export_merged_model(models, output_path, tau, calibration=None, label_thresh
     manifest = {
         "labels": LABEL_NAMES,
         "tau": tau,
-        "version": "0.5.3",
+        "version": "0.5.4",
         "trees": all_trees,
         "trees_per_label": trees_per_label,
         "confidence_calibration": calibration,

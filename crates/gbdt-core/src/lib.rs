@@ -67,9 +67,9 @@ pub const GLYPH_COUNT_MIN: f64 = 8.0;
 /// Page-level calibration logistic: P(flipped) = sigmoid(b0 + b1*L + b2*N)
 /// with L = sum of per-glyph log-odds and N = glyph count. Fitted on the
 /// fatura2 calibration split by scripts/train_glyph_classifier.py.
-pub const GLYPH_CAL_B0: f64 = -0.00890701834;
-pub const GLYPH_CAL_B1: f64 = 0.374395665;
-pub const GLYPH_CAL_B2: f64 = 0.0126013738;
+pub const GLYPH_CAL_B0: f64 = 0.3380543378;
+pub const GLYPH_CAL_B1: f64 = 0.1624453914;
+pub const GLYPH_CAL_B2: f64 = -0.0038413291;
 /// C2: below this |sum_logodds| the glyph gate is a coin flip against the
 /// GBDT flip head; at or above it the glyph gate is right 39/39 on 600 clean
 /// cardinal pages, so the head must not veto it (review-rate fix).
