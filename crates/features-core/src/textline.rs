@@ -141,11 +141,13 @@ fn deskew_analyze(gray: &[f64], width: usize, height: usize, axis_rad: f64) -> D
     // for every applied angle A the deskew cancels A exactly, so flip_score
     // is positive for A<180 and negative for A>=180). Near the 0/180 wrap the
     // radon refinement lands at 0.2 vs 179.8 for the same horizontal text;
-    // snap that fold region to 0 deg so the near-horizontal case never gets
-    // a spurious ~180 deg flip.
+    // C1: keep one frame across the fold. `signed_tilt_deg` gives the small
+    // signed residual inside the band, so we deskew by -tau instead of
+    // snapping to 0 and leaving up to 1.5 deg of tilt in the evidence.
     let axis_deg = axis_rad.to_degrees() % 180.0;
-    let deskew_deg = if axis_deg < 1.5 || axis_deg > 178.5 {
-        0.0
+    let tau = crate::signed_tilt_deg(axis_deg);
+    let deskew_deg = if tau.abs() < crate::FOLD_BAND_DEG {
+        -tau
     } else {
         axis_deg - 180.0
     };
@@ -361,8 +363,9 @@ fn otsu256(gray: &[f64]) -> f64 {
 /// cheaper binarization and nearest-neighbour sampling are fine.
 pub fn cheap_line_quality(gray: &[f64], width: usize, height: usize, axis_rad: f64) -> (f64, f64) {
     let axis_deg = axis_rad.to_degrees() % 180.0;
-    let deskew_deg = if axis_deg < 1.5 || axis_deg > 178.5 {
-        0.0
+    let tau = crate::signed_tilt_deg(axis_deg);
+    let deskew_deg = if tau.abs() < crate::FOLD_BAND_DEG {
+        -tau
     } else {
         axis_deg - 180.0
     };

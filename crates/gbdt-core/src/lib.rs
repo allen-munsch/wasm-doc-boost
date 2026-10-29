@@ -70,6 +70,10 @@ pub const GLYPH_COUNT_MIN: f64 = 8.0;
 pub const GLYPH_CAL_B0: f64 = -0.00890701834;
 pub const GLYPH_CAL_B1: f64 = 0.374395665;
 pub const GLYPH_CAL_B2: f64 = 0.0126013738;
+/// C2: below this |sum_logodds| the glyph gate is a coin flip against the
+/// GBDT flip head; at or above it the glyph gate is right 39/39 on 600 clean
+/// cardinal pages, so the head must not veto it (review-rate fix).
+pub const GLYPH_STRONG_LOGODDS: f64 = 30.0;
 
 /// Fallback operating point if the manifest does not carry one. The shipped
 /// value is pinned in model.json's manifest by tau calibration.
@@ -226,15 +230,12 @@ pub fn combine_rotation_calibrated(
     // failure mode. Do not override the radon axis here.
     let axis_rad = features[RADON_AXIS_INDEX];
 
-    let mut axis_deg = axis_rad.to_degrees().rem_euclid(180.0);
-    // Fold-snap: the mod-180 axis is blind to the 0/180 fold. The S2 fine
-    // axis drifts up to ~0.45 deg on true-0 pages, so a 0.25 band lets those
-    // escape and report as 179.6 deg (accepted-flip + cardinal-pm1 misses).
-    // Snap at 0.75 deg: the gate skips |t|<=0.5 tilts and a real 1.0 deg tilt
-    // resolves to ~0.93 deg, so this band stays clear of true small tilts.
-    if axis_deg < 0.75 || axis_deg > 179.25 {
-        axis_deg = 0.0;
-    }
+    let axis_deg = axis_rad.to_degrees().rem_euclid(180.0);
+    // C1: one fold convention. The mod-180 axis is blind to the 0/180 fold;
+    // signed_tilt_deg returns the small signed residual inside the band so the
+    // evidence frame and the wrap formula below agree (no skipped deskew, no
+    // two snap constants).
+    let tilt = features_core::signed_tilt_deg(axis_deg);
     let flip_p = preds[5];
     let trust_p = preds[6];
 
@@ -256,7 +257,11 @@ pub fn combine_rotation_calibrated(
         _ => vote_flip_gate(features, flip_p),
     };
 
-    let rotation_deg = (180.0 - axis_deg).rem_euclid(180.0) + 180.0 * flip;
+    let rotation_deg = if tilt.abs() < features_core::FOLD_BAND_DEG {
+        (tilt + 180.0 * flip).rem_euclid(360.0)
+    } else {
+        (180.0 - axis_deg).rem_euclid(180.0) + 180.0 * flip
+    };
     let raw_confidence = trust_p * flip_conf;
     let confidence = match calibration {
         Some(curve) => calibrate_confidence(raw_confidence, curve),
@@ -268,7 +273,12 @@ pub fn combine_rotation_calibrated(
     // head gets right. Route any glyph/GBDT disagreement to review rather than
     // trusting the weaker per-glyph signal alone.
     let gbdt_flip = if flip_p >= 0.5 { 1.0 } else { 0.0 };
-    let glyph_gbdt_disagrees = glyph_gate_active && flip != gbdt_flip;
+    // C2: a weak GBDT flip head must not veto a strong per-glyph signal. On
+    // 600 clean cardinal pages the glyph gate is right 49/52 at |logodds|>=20
+    // and 39/39 at >=30, while the head is right only 3/52 there. Skip the
+    // disagreement veto when the glyph evidence is strong.
+    let glyph_strong = matches!(glyph, Some(ev) if ev.sum_logodds.abs() >= GLYPH_STRONG_LOGODDS);
+    let glyph_gbdt_disagrees = glyph_gate_active && flip != gbdt_flip && !glyph_strong;
     let needs_review = confidence < tau || preds[0] < 0.5 || glyph_gbdt_disagrees;
 
     // Flip-vote counts and agreement: n_lines is the vote count; the winning

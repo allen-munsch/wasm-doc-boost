@@ -535,6 +535,35 @@ fn combine_rotation(features: Vec<f64>, preds: Vec<f64>, tau: f64) -> PyResult<P
     })
 }
 
+/// v0.5.4 (C6): the loaded manifest's version string, so callers can check
+/// the wheel against model.json (removed in v0.5.3; restored per feedback).
+#[pyfunction]
+fn model_version() -> String {
+    let guard = MODEL.lock().unwrap();
+    guard
+        .as_ref()
+        .and_then(|m| m.version.clone())
+        .unwrap_or_default()
+}
+
+// Deprecated v2 aliases (C6): kept for one release so callers migrating from
+// v0.4.0 (`load_model_v2`/`predict_v2`/`extract_all_v2`) keep working. They
+// delegate to the current single surface.
+#[pyfunction]
+fn extract_all_v2(pixels: Vec<u8>, width: usize, height: usize) -> PyResult<Vec<f64>> {
+    extract_all(pixels, width, height)
+}
+
+#[pyfunction]
+fn load_model_v2(json: &str) -> PyResult<()> {
+    load_model(json)
+}
+
+#[pyfunction]
+fn predict_v2(pixels: Vec<u8>, width: usize, height: usize) -> PyResult<Py<PyAny>> {
+    predict(pixels, width, height)
+}
+
 /// `py_features` — feature extraction, v3 GBDT prediction, PDF inspection,
 /// PII scanning, and the ONNX engines (layout, OCR, span PII) behind optional
 /// Python classes.
@@ -563,6 +592,10 @@ fn py_features(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(load_model, m)?)?;
     m.add_function(wrap_pyfunction!(predict, m)?)?;
     m.add_function(wrap_pyfunction!(combine_rotation, m)?)?;
+    m.add_function(wrap_pyfunction!(model_version, m)?)?;
+    m.add_function(wrap_pyfunction!(extract_all_v2, m)?)?;
+    m.add_function(wrap_pyfunction!(load_model_v2, m)?)?;
+    m.add_function(wrap_pyfunction!(predict_v2, m)?)?;
     m.add_class::<engines::LayoutEngine>()?;
     m.add_class::<engines::OcrEngine>()?;
     m.add_class::<engines::PiiEngine>()?;

@@ -40,6 +40,21 @@ pub mod shadow;
 pub mod textline;
 pub mod texture;
 
+/// Fold-band convention shared with gbdt-core (C1): the radon axis is only
+/// defined mod 180, so the 0/180 fold is ambiguous. `signed_tilt_deg` maps an
+/// axis to the signed text-line tilt in (-90, 90]: near-horizontal pages get a
+/// small |tilt| < FOLD_BAND_DEG with the correct sign (axis 179.6 -> +0.4,
+/// axis 0.4 -> -0.4), so callers can keep the evidence and the wrap formula in
+/// one frame instead of snapping the fold to 0 and skipping deskew.
+pub const FOLD_BAND_DEG: f64 = 1.5;
+
+pub fn signed_tilt_deg(axis_deg: f64) -> f64 {
+    let axis = axis_deg % 180.0;
+    let axis = if axis < 0.0 { axis + 180.0 } else { axis };
+    let alpha = (180.0 - axis) % 180.0;
+    if alpha > 90.0 { alpha - 180.0 } else { alpha }
+}
+
 /// Noise + shadow features: the 9 core indices 55..=63 (noise
 /// high_pass_residual_variance, blockiness_h, blockiness_v, gradient_snr;
 /// shadow dark_ratio, illum_var, shadow_depth_mean, shadow_depth_std,
