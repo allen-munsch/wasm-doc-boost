@@ -13,13 +13,11 @@ export function bench_sobel(width: number, height: number, iterations: number): 
  */
 export function classifyPdf(data: Uint8Array): any;
 
-export function classify_file(bytes: Uint8Array): any;
-
 /**
- * Per-degree rotation classification (v2): 5 doc traits + flip + trust +
+ * Per-degree rotation classification: 5 doc traits + flip + trust +
  * deterministic `rotation_deg`, `rotation_confidence`, `needs_review`.
  */
-export function classify_file_v2(bytes: Uint8Array): any;
+export function classify_file(bytes: Uint8Array): any;
 
 /**
  * Extract text items with positions from a PDF memory buffer.
@@ -36,8 +34,6 @@ export function extractTextWithPositions(data: Uint8Array): any;
  */
 export function load_crf_model(json: string): void;
 
-export function load_model(json: string): void;
-
 /**
  * Load the per-degree rework model manifest (v3; format-compatible with v2).
  *
@@ -45,13 +41,7 @@ export function load_model(json: string): void;
  * `train_model_v2.py`. Also accepts a legacy flat tree array for
  * compatibility, but then the 7-label count and the default tau apply.
  */
-export function load_model_v2(json: string): void;
-
-/**
- * Release-tag version of the loaded model (empty string when unset or not
- * loaded). Matches the tag the model.json was built for, e.g. "0.4.0".
- */
-export function model_version(): string;
+export function load_model(json: string): void;
 
 /**
  * Scan text for PII/PCI (credit card numbers, SSNs, emails, phones).
@@ -68,11 +58,8 @@ export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly bench_sobel: (a: number, b: number, c: number) => [number, number, number];
     readonly classify_file: (a: number, b: number) => [number, number, number];
-    readonly classify_file_v2: (a: number, b: number) => [number, number, number];
     readonly load_crf_model: (a: number, b: number) => [number, number];
     readonly load_model: (a: number, b: number) => [number, number];
-    readonly load_model_v2: (a: number, b: number) => [number, number];
-    readonly model_version: () => [number, number];
     readonly scan_pii: (a: number, b: number) => [number, number, number];
     readonly classifyPdf: (a: number, b: number) => [number, number, number];
     readonly extractTextWithPositions: (a: number, b: number) => [number, number, number];
@@ -82,7 +69,6 @@ export interface InitOutput {
     readonly __externref_table_alloc: () => number;
     readonly __wbindgen_externrefs: WebAssembly.Table;
     readonly __externref_table_dealloc: (a: number) => void;
-    readonly __wbindgen_free: (a: number, b: number, c: number) => void;
     readonly __wbindgen_start: () => void;
 }
 
