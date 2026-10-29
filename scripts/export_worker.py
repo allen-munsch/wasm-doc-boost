@@ -187,8 +187,14 @@ def main():
     parser.add_argument("--images", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--labels-csv", required=True)
-    parser.add_argument("--gpu", action="store_true", help="rotate on CUDA (radon stays CPU)")
+    parser.add_argument("--gpu", action="store_true", help="rotate on CUDA via torch (radon runs on the py_features backend; auto=cuda)")
     args = parser.parse_args()
+
+    print(
+        f"[{os.getpid()}] radon backend: {py_features.backend_info()}",
+        file=sys.stderr,
+        flush=True,
+    )
 
     labels = {}
     with open(args.labels_csv, newline="") as f:

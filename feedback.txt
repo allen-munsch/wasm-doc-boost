@@ -1,0 +1,232 @@
+
+None selected 
+
+Skip to content
+Using Gmail with screen readers
+4 of 165
+v0.5.0
+Trash
+James Munsch
+	
+2:34 PM (3 hours ago)
+	
+	
+to me
+# wasm-doc-boost v0.5.0: dove integration results
+
+Built from the v0.5.0 tag (`maturin build --release`, aarch64; no release assets were published yet) and installed in
+dove's image; `frontend/model.json` is the tag's file. Compared against v0.4.0 (release wheel + model) on the same
+inputs. Scripts are in `docs/wasm-doc-boost-0.3.0-feedback/` (folder name predates this report).
+
+## 1. What is better
+
+| | 0.4.0 | 0.5.0 |
+|---|---|---|
+| FATURA pages scored `is_digital >= 0.5` (benchmark, 16 pages) | 13 | **16** |
+| FATURA pages routed to the clean lane (dove's `arbitrate_page_lane`) | 13 | **16** |
+| SRD/CORD pages routed to the messy lane (32 pages) | 32 | 32 |
+| `predict_v2` per page, 512 px long edge (median) | 109.9 ms | **25.4 ms** |
+| `predict_v2` per page, 841 px long edge (median) | 296.9 ms | **72.2 ms** |
+
+The three 80-degree FATURA pages that 0.4.0 scored 0.11-0.16 are now 0.73 / 1.00 / 1.00, i.e. the f61/f62 de-overfit
+worked, and no SRD/CORD page became digital. Thank you for acting on the earlier report.
+
+## 2. Rotation regression on rotated copies of born-digital invoices
+
+Same test as the 0.3.0/0.4.0 reports (150 FATURA invoices x 4 cardinal rotations, `rotation_deg == th`), plus 60
+images x 4 random angles. `rotation_deg` snapped to the nearest quarter.
+
+| | 0.4.0 @512 | 0.5.0 @512 | 0.5.0 @841 (native) |
+|---|---|---|---|
+| upright (0) exact | 150/150 | 130/150 | 147/150 |
+| 90 exact | 149/150 | 133/150 | 98/150 |
+| 180 exact | 149/150 | 113/150 | 142/150 |
+| 270 exact | 149/150 | 100/150 | 110/150 |
+| overall | **99.5%** | 79.3% | 82.8% |
+| axis (mod 180) right on 90/270 pages | 300/300 | 292/300 | **217/300** |
+| median glyphs voting per page | 89 | 33 | 93 |
+| arbitrary angles: axis within 5 deg | 99% | 88% (p90 err 13.5 deg) | 94% |
+| `needs_review` rate | 2.2% | 53.8% | 33.5% |
+
+Two different failure modes:
+
+- **At 512 px** the hybrid path (k=4 core, k=2 text-line/glyph) halves the glyph votes (89 -> 33) and loses axis
+  precision; flip errors are mostly flagged for review (the review rate goes to 54%).
+- **At 841 px** glyphs recover (93), but about 30% of 90/270 pages get the **wrong axis at confidence ~0.94** and are
+  NOT flagged (28 + 18 accepted errors out of 600). This is the dangerous one: sideways pages read as upright text.
+
+Decision-time policy table (what a caller gets if it applies the model's turn under each gate; "left/VLM" = not applied):
+
+| model / input | gate | applied right | applied WRONG | left/VLM |
+|---|---|---|---|---|
+| 0.4.0 @512 | always | 99.5% | 0.5% | 0% |
+| 0.4.0 @512 | not `needs_review` | 97.8% | **0.0%** | 2.2% |
+| 0.5.0 @512 | `confidence >= 0.5` | 74.2% | 15.2% | 10.7% |
+| 0.5.0 @512 | `confidence >= 0.9` | 48.3% | 4.7% | 47.0% |
+| 0.5.0 @512 | not `needs_review` | 45.8% | 0.3% | 53.8% |
+| 0.5.0 @841 | not `needs_review` | 58.5% | **8.0%** | 33.5% |
+
+So with 0.5.0 `rotation_confidence` is not a usable gate on its own (confidence >= 0.9 is still wrong 4.7% of the time);
+only `needs_review` is, at the cost of sending about half the pages to the VLM. In the end-to-end benchmark (512 px, dove's
+`confidence >= 0.5` gate) the 16 FATURA pages went from 16/16 correct (0.4.0) to 11/16: 3 of 10 rotated pages turned the
+wrong way (cases 000 and 006: 90 deg pages, and 015: a 100 deg page, all turned 90 instead of 270) and 2 of 6 upright pages turned 180 (010, 013).
+
+## 3. Plain text pages stop looking digital
+
+A rasterised text-only PDF page (fpdf2 Helvetica, 300 dpi, then resized to 512) with 1, 3, 10 and 25 lines:
+
+| | 1 line | 3 lines | 10 lines | 25 lines |
+|---|---|---|---|---|
+| 0.4.0 `is_digital` | 1.000 | 1.000 | 1.000 | 0.005 |
+| 0.5.0 `is_digital` | 0.001 | 0.001 | 0.003 | 0.000 |
+| 0.5.0 `is_paper` | 0.76 | 0.85 | 0.93 | 0.99 |
+
+Plain black-on-white generated text is now read as paper. (Two of dove's unit tests, which upload such a page, now
+route it to the vision model instead of Tesseract.) Possibly the CORU photographed-receipt additions to training.
+
+## 4. Smaller items
+
+- `predict_v2` (Python) returns the same 16 keys as 0.4.0; `trait_labels` / `trait_uncertain` and the new
+  `label_thresholds` exist only in the WASM `classify_file_v2` / manifest. Consider exposing them in `predict_v2`.
+- `label_thresholds` recommends is_digital 0.25, is_crumpled 0.71, is_shadow 0.81; dove keeps its own thresholds
+  (0.5 / 0.9 / 0.5). Not applied here.
+- README says `classify_file_v2` resizes to 512 px. A short note on the intended input size for the hybrid path
+  (and a warning that native-size input behaves differently) would help integrators.
+
+## 5. Caveats
+
+- Same benchmark/FATURA sample as before, and the rotated copies are synthetic. 0.5.0 was trained with CORU added
+  and FATURA2 at 36% of samples; overlap with this FATURA set is unknown.
+- End-to-end numbers use only 16 FATURA pages; the per-page A/B above (600 pages) is the larger sample.
+- Wheel built locally on aarch64 (manylinux_2_35), not the CI manylinux_2_17 artifact.
+
+
+Fine deskew in the Rust core: how dove's deskew.py works, how it compares to the radon axis head, and a multistage proposal (for a v0.5.2)
+
+Audience: the wasm-doc-boost maintainer. Context: dove (a server pipeline) currently uses the GBDT only for the quarter-turn and keeps a separate Python deskew.py for the fine tilt. We would like to ship one rotation logic that also runs in the frontend wasm to pre-classify uploads, so we measured whether v0.4.0's rotation_deg can replace it. It cannot yet; this note says why and proposes a way to get there. Everything marked measured was run on this repo's data with the v0.4.0 wheel and model (v0.5.0 numbers are labelled). Anything marked estimate was not run.
+1. Where each piece runs today (dove)
+
+Render stage, per image page
+  1. rasterize (300 dpi)
+  2. GBDT score on the raw raster  -> decide the quarter-turn (0/90/180/270)
+  3. rotate by that quarter
+  4. deskew.py                     -> fine tilt, +-15 deg
+  5. store PNG
+Classify stage (later): GBDT again on the stored PNG -> is_digital etc. for routing
+
+deskew.py never calls the classifier; the GBDT never sees the deskewed page during orientation, only during routing.
+2. deskew.py (projection-profile search)
+
+    Grayscale, downscale to at most 1000 px wide, Otsu threshold -> binary ink mask. Pages with under 1% ink abstain.
+    Score of an angle = variance of the row-sum projection of the mask rotated by that angle (sharp text bands = straight).
+    Search: coarse -15..+15 deg in 1 deg steps (31 candidates), then +-1 deg around the winner in 0.1 deg steps (21) = 52 rotations of a mask of at most ~1000x1400 px, INTER_NEAREST.
+    Accept only 0.5 <= |angle| <= 15 deg; otherwise do nothing (so it never rotates on noise or on a wrong orientation).
+    Applies the angle to the full-resolution page: rotate(angle, BICUBIC, expand=True, fill white).
+    Cost measured: 39 ms median per page (cv2), on the already quarter-turned page.
+
+3. The Rust core (v0.4.0), same statistic, different job
+
+    radon.rs: rotate the grayscale image by -angle (nearest-neighbour, square-padded with the border median) and take the variance of the horizontal projection, at 60 bins x 3 deg over [0, 180), then a parabolic refinement of the peak. The top-4 local maxima are scored by text-line quality so a perpendicular structure (table rules) does not win.
+    It is the same objective as deskew.py, but with 3 deg bins (refined) over the whole half-circle, instead of 0.1 deg steps over +-15 deg.
+    textline.rs already deskews an ink mask by the estimated axis before computing line votes, ascender/descender mass and glyph crops (rotate_mask_square, nearest-neighbour). So a deskewed mask already exists inside the core.
+    combine_rotation: rotation_deg = (180 - axis) mod 180 + 180 * flip. The axis is snapped to 0 when < 1.0 deg or > 179.0 deg (line 203), and the strong line-vote/glyph flip gate runs only when the axis is cardinal (0 or within 1 deg of 90; line 217). Off-cardinal, the flip comes from the raw GBDT flip head (README: about 76% accurate).
+    v0.5.0 extract_all_v2_hybrid: the radon axis and boundary run on a k=4 copy (128 px long edge), the glyph path on k=2 (256 px). Noise/shadow features are recomputed at full resolution.
+
+4. Side by side
+	deskew.py 	Rust radon axis head (v0.4.0)
+objective 	row-projection variance 	same
+input 	Otsu binary mask, <= 1000 px wide 	grayscale, 512 px (0.4.0) / 128 px (0.5.0)
+angle range 	+-15 deg around upright 	[0, 180) (any rotation, mod 180)
+resolution 	0.1 deg (coarse 1 deg -> fine 0.1 deg) 	3 deg bins + parabola
+dead band 	below 0.5 deg: nothing 	axis within 1 deg of horizontal/vertical snaps to exactly 0
+candidate handling 	single global max 	top-4 maxima scored by text-line quality
+flip (0 vs 180) 	not its job 	line vote / glyph gate (cardinal only) + GBDT head
+output 	applies the rotation to the raster 	emits rotation_deg only; caller rotates
+cost 	52 mask rotations, 39 ms (measured) 	one 60-angle pass inside a 25 ms (0.5.0) / 110 ms (0.4.0) total
+5. What we measured
+
+Data: dove's data/benchmarks (20 PDFs; ground-truth page rotations in cases.jsonl, FATURA interleaved with SRD and CORD) and FATURA invoices rotated/tilted synthetically. Scripts: docs/wasm-doc-boost-0.3.0-feedback/ (deskew_ab.py, deskew_small_angles.py, flip_evidence_offcardinal.py, multistage_prototype.py).
+
+5.1 Benchmark, 16 FATURA pages (residual tilt after the full correction)
+	within 1 deg 	within 2 deg 	worst
+quarter-turn + deskew.py 	100% 	100% 	0.7 deg
+quarter-turn + GBDT fine angle (rotation_deg) 	94% 	100% 	1.9 deg
+GBDT -rotation_deg alone 	94% 	100% 	1.9 deg
+
+The 10 cardinal pages are identical for all methods. The 6 off-cardinal pages (80/95/100 deg) are where the 3 deg bins show: 0.9 to 1.9 deg of residual vs 0.6 to 0.7 deg. SRD and CORD pages are not recoverable by any method (roughly 10 to 35% right) but all 32 are needs_review, so they are routed correctly.
+
+5.2 Small tilts, the real job of a deskew step (360 pages = 20 FATURA x 18 tilts from -12 to +12 deg, ~300 dpi)
+	within 0.5 	within 1 	within 2 	pages off by > 10 deg
+deskew.py 	100% 	100% 	100% 	0
+GBDT fine angle, bounded to +-15 deg 	61% 	90% 	97% 	5
+GBDT -rotation_deg unbounded 	59% 	86% 	88% 	43 (12%)
+
+The 43 are 180-degree flips on tilted pages (see 5.3). The bounded outliers are extra tilt of about 12 deg on a few already-straight pages. For |tilt| <= 1 deg the model reports rotation_deg == 0 on 13 to 19 of 20 pages (the fold-snap).
+
+5.3 Flip evidence off the cardinal axes (400 pages: tilts +-1.5 to +-12 deg, upright and upside-down), v0.4.0
+
+Note on convention, which tripped our first attempt: the flip bit the model emits is rotation_deg >= 180, so an upright page tilted -3 deg has bit 1. The evidence features are already in that convention (textline.rs deskews by the applied angle).
+decision rule (single stage, tilted page) 	upright wrong 	upside-down wrong
+GBDT flip head (today off-cardinal) 	9.5% 	12.5%
+line vote only 	27.5% 	31%
+glyph (>= 8 voted) else line vote 	17.5% 	15.5%
+glyph AND head must agree, else review 	4% accepted-wrong (19% review) 	5% accepted-wrong (18% review)
+
+So the strong evidence does not transfer to off-cardinal axes as-is. Our reading: it is computed on a mask deskewed only to the 3 deg-bin axis, which blurs ascender/descender shape.
+
+5.4 Prototype of the multistage idea (same 400 pages)
+
+Stage A: deskew.py's estimator straightens the page (stand-in for a fine stage in Rust). Stage B: the GBDT on the straightened page, where the axis is cardinal and the existing strong gate applies.
+	single stage (today) 	straighten first, then GBDT
+0-vs-180 wrong, upright 	10.0% 	4.0%
+0-vs-180 wrong, upside-down 	10.5% 	5.5%
+needs_review, upright / upside-down 	34.5% / 37.5% 	18.5% / 13.5%
+total angle error, median 	0.29 deg 	0.00 deg
+total angle within 0.5 deg 	74% / 72% 	96% / 94%
+pages off by > 10 deg 	22 / 24 of 200 	8 / 12 of 200
+
+Every remaining error in the multistage column is a flip, not an axis error. 4 to 5.5% is still above the ~0.5% the model reaches at exact cardinals; we have not isolated why (candidates: two bicubic resamples in the prototype, 512 px input, specific templates).
+
+5.5 v0.5.0 context (measured earlier): the hybrid path's axis falls apart on rotated copies (axis error p90 13.5 deg vs 0.75 deg for 0.4.0; 88% within 5 deg vs 99%; median glyph votes 33 vs 89), consistent with computing the radon axis on 128 px.
+6. Proposal: a multistage adjustment in the core
+
+The idea is to do for the angle what the hybrid path did for features: cheap coarse stage, accurate fine stage on a small search window, then reuse the one deskewed mask for everything downstream (this also matches the earlier plan to hoist the deskew in textline.rs and reuse sobel, find_line_bands and the projection).
+
+S0  coarse axis    k=4 grayscale (128 px), 60-bin radon, top-4 candidates     (exists)
+S1  pick candidate text-line quality                                         (exists)
+S2  FINE axis      Otsu ink mask at ~768-1000 px long edge;                  (NEW)
+                   projection variance at 0.1-0.2 deg steps over +-1.5 bins around the S1 axis
+                   (about 30 evaluations, or 6-8 with a parabolic/golden-section search)
+S3  one deskewed   rotate the mask by the S2 angle ONCE; compute line bands,   (hoist existing)
+    mask           flip evidence and k=2 glyph crops on it
+S4  flip           line-vote/glyph gate on the straightened mask at ANY    (extend existing)
+                   tilt (S3 makes every axis effectively cardinal)
+S5  combine        rotation_deg = refined axis + flip; also emit skew_deg
+
+Estimate (not run): S2 is 21 to 30 mask rotations at the size deskew.py uses, i.e. roughly 15 to 25 ms in cv2-like code (its 52 rotations take 39 ms), which fits the hybrid latency budget (25 ms total at 512 px). The expected gain is the 5.4 table.
+
+Suggested outputs from predict_v2 / classify_file_v2, so callers can stop running their own deskew:
+
+    quarter (0/90/180/270) and skew_deg: the signed residual in (-45, 45], not snapped, valid whatever the flip decision is. dove would then do rotate(quarter) + rotate(skew_deg) (or one rotation by -rotation_deg).
+    Split the single needs_review into axis_ok and flip_ok. An uncertain flip should not discard a precise axis: the caller can still apply the deskew and ask OSD or the VLM only for the 0-vs-180 bit.
+
+7. Other things we would suggest for a v0.5.2
+
+    Fix the hybrid axis precision. Run the fine axis stage (S2) at >= 768 px even if the rest stays k=4/k=2. Today 0.5.0 is about 4x faster than 0.4.0 but loses 20 points of rotation accuracy on rotated born-digital pages; S2 is the cheapest way to get both.
+    Remove or shrink the fold-snap dead band (< 1 deg or > 179 deg -> 0). With S2 the snap is only needed below ~0.25 deg.
+    Do not trust rotation_confidence alone. On 0.5.0 at 512 px, confidence >= 0.9 was still wrong 4.7% of the time and only needs_review was safe. If the confidence is meant to be P(within 1 deg), please re-calibrate it on rotated copies.
+    Evaluate on rotated and tilted copies, not only upright gold images. "Always report 0" scores 100% on the upright set. A table of exact recovery per cardinal and per tilt bin (|t| in 0.5-1, 1-3, 3-8, 8-15), template-grouped, would have caught the 0.3.0 and 0.5.0 regressions.
+    Add plain-text pages to the digital set. Rasterised text-only PDFs (fpdf2 Helvetica, 1 to 25 lines) are is_digital 1.000 in 0.4.0 for 1 to 10 lines and ~0.001 in 0.5.0 (is_paper 0.76 to 0.99); see sparse_text_pages.py.
+    Expose in Python what the wasm returns: trait_labels, trait_uncertain and label_thresholds are absent from predict_v2.
+    Document the intended input size of the hybrid path; native-size input behaves differently (about 30% of 90/270 pages got the wrong axis at confidence ~0.94 at 841 px in 0.5.0).
+    Try the Otsu ink mask for the fine stage (what deskew.py does) instead of grayscale: it ignores background gradients and shadows. We have not measured this; it is a hypothesis.
+
+8. Caveats
+
+    FATURA only for the angle tests; the tilts and rotations are synthetic (PIL rotate). Real scans have noise, curvature and perspective that none of these methods handle.
+    Small samples: 16 benchmark pages, 360 tilted pages (20 distinct invoices). The 80/95/100 deg cases are 6 pages.
+    The prototype uses Python deskew.py as stage S2, so it shows the accuracy a good fine stage would give, not the cost or the behaviour of a Rust implementation.
+    v0.4.0 numbers unless labelled v0.5.0.
+
+wasm-doc-boost-deskew-multistage.md
+Displaying wasm-doc-boost-deskew-multistage.md.

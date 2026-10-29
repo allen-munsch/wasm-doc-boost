@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Parallel per-degree feature extraction.
+"""Parallel per-degree feature extraction, GPU-first.
 
-Splits labels.csv into N chunks, runs export_worker.py on each chunk
-as a subprocess (PyO3 hangs with Pool), then merges the .npz files.
+Splits labels.csv into N chunks, runs export_worker.py on each chunk as a
+subprocess (PyO3 hangs with Pool), streams each worker's progress live, then
+merges the .npz files. Radon runs on the py_features backend (auto -> CUDA
+when the .so was built with --features gpu and a device is reachable).
 """
 
 import argparse
@@ -11,6 +13,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 
 import numpy as np
 
@@ -25,6 +28,11 @@ LABEL_NAMES = [
 ]
 
 
+def stream_worker(i, proc):
+    for line in proc.stdout:
+        print(f"[w{i}] {line.rstrip()}", flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--images", required=True)
@@ -33,6 +41,16 @@ def main():
     parser.add_argument("--workers", type=int, default=16)
     args = parser.parse_args()
 
+    try:
+        import py_features
+
+        backend = py_features.backend_info()
+        print(f"radon backend: {backend}", flush=True)
+        if backend == "cpu":
+            print("WARNING: CPU radon (py_features built without --features gpu)", flush=True)
+    except Exception as e:  # pragma: no cover
+        print(f"radon backend probe failed: {e}", flush=True)
+
     with open(args.labels, newline="") as f:
         rows = list(csv.DictReader(f))
 
@@ -40,6 +58,7 @@ def main():
     with tempfile.TemporaryDirectory() as tmpdir:
         procs = []
         outputs = []
+        threads = []
         for i in range(args.workers):
             chunk = rows[i * chunk_size : (i + 1) * chunk_size]
             if not chunk:
@@ -69,12 +88,18 @@ def main():
                 env=env,
             )
             procs.append((i, proc))
+            t = threading.Thread(target=stream_worker, args=(i, proc), daemon=True)
+            t.start()
+            threads.append(t)
             print(f"launched worker {i} ({len(chunk)} images)", flush=True)
 
+        for t in threads:
+            t.join()
         for i, proc in procs:
-            out_txt, _ = proc.communicate()
-            tail = out_txt.strip()[-200:] if out_txt.strip() else "(no output)"
-            print(f"worker {i} rc={proc.returncode}: {tail}", flush=True)
+            rc = proc.wait()
+            if rc != 0:
+                print(f"ERROR: worker {i} rc={rc}", flush=True)
+                sys.exit(1)
 
         missing = [o for o in outputs if not os.path.exists(o)]
         if missing:

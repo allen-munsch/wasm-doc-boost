@@ -12,6 +12,20 @@ import numpy as np
 from PIL import Image
 import py_features
 
+
+def median_border_color(rgb, border=4):
+    """Median border color of the source image — the fill export_worker.py uses
+    when rotating, so benchmark rotations match the training distribution
+    (plain rotate() injects black corner triangles that dominate the radon
+    projection and regress the axis on small tilts)."""
+    a = np.asarray(rgb)
+    top = a[:border].reshape(-1, 3)
+    bottom = a[-border:].reshape(-1, 3)
+    left = a[border:-border, :border].reshape(-1, 3)
+    right = a[border:-border, -border:].reshape(-1, 3)
+    border_px = np.concatenate([top, bottom, left, right], axis=0)
+    return tuple(int(v) for v in np.median(border_px, axis=0))
+
 MAX_LONG_EDGE = 512
 TILTS = [-12, -8, -5, -3, -1.5, -1, -0.5, 0.5, 1, 1.5, 3, 5, 8, 12]
 
@@ -50,8 +64,9 @@ def main():
         px, w, h = py_features.load_rgb_resized(raw, MAX_LONG_EDGE)
         rgb = np.frombuffer(px, np.uint8).reshape(h, w, 3)
         base = Image.fromarray(rgb, 'RGB')
+        fill = median_border_color(rgb)
         for angle in (0, 90, 180, 270):
-            im = base if angle == 0 else base.rotate(angle, expand=True, resample=Image.BICUBIC)
+            im = base if angle == 0 else base.rotate(angle, expand=True, resample=Image.BICUBIC, fillcolor=fill)
             pxr = np.asarray(im, np.uint8).tobytes()
             r = py_features.predict(pxr, im.size[0], im.size[1])
             err = cerr(r['rotation_deg'], angle)
@@ -72,10 +87,11 @@ def main():
         px, w, h = py_features.load_rgb_resized(raw, MAX_LONG_EDGE)
         rgb = np.frombuffer(px, np.uint8).reshape(h, w, 3)
         base = Image.fromarray(rgb, 'RGB')
+        fill = median_border_color(rgb)
         for t in TILTS:
             if abs(t) <= 0.5:
                 continue
-            im = base.rotate(t, expand=True, resample=Image.BICUBIC)
+            im = base.rotate(t, expand=True, resample=Image.BICUBIC, fillcolor=fill)
             pxr = np.asarray(im, np.uint8).tobytes()
             r = py_features.predict(pxr, im.size[0], im.size[1])
             residual = abs(r['skew_deg'] + t)

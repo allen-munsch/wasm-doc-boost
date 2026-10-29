@@ -2,11 +2,9 @@ use std::sync::Mutex;
 
 use wasm_bindgen::prelude::*;
 
-use gbdt_core::{
-    combine_rotation_calibrated, GlyphEvidence, ModelManifest, DEFAULT_TAU, LABELS,
-};
 #[cfg(test)]
 use gbdt_core::combine_rotation;
+use gbdt_core::{DEFAULT_TAU, GlyphEvidence, LABELS, ModelManifest, combine_rotation_calibrated};
 
 mod pdf;
 
@@ -453,14 +451,26 @@ mod tests {
 
         let preds = [0.9, 0.0, 0.0, 0.0, 0.0, 0.1, 0.8];
         let d = combine_rotation(&features, &preds, 0.9);
-        assert!((d.rotation_deg - 163.0).abs() < 1e-9, "deg={}", d.rotation_deg);
-        assert!((d.confidence - 0.8 * 0.9).abs() < 1e-12, "conf={}", d.confidence);
+        assert!(
+            (d.rotation_deg - 163.0).abs() < 1e-9,
+            "deg={}",
+            d.rotation_deg
+        );
+        assert!(
+            (d.confidence - 0.8 * 0.9).abs() < 1e-12,
+            "conf={}",
+            d.confidence
+        );
         assert!(d.needs_review, "conf 0.72 < tau 0.9 must review");
 
         // flip=1 -> rotation = 163 + 180 = 343.
         let preds = [1.0, 0.0, 0.0, 0.0, 0.0, 0.9, 1.0];
         let d = combine_rotation(&features, &preds, 0.5);
-        assert!((d.rotation_deg - 343.0).abs() < 1e-9, "deg={}", d.rotation_deg);
+        assert!(
+            (d.rotation_deg - 343.0).abs() < 1e-9,
+            "deg={}",
+            d.rotation_deg
+        );
         assert!((d.confidence - 0.9).abs() < 1e-12, "conf={}", d.confidence);
         assert!(!d.needs_review, "conf 0.9 >= tau 0.5 and is_document");
 
@@ -473,7 +483,11 @@ mod tests {
         features[RADON_AXIS_INDEX] = 0.0;
         let preds = [1.0, 0.0, 0.0, 0.0, 0.0, 0.1, 1.0];
         let d = combine_rotation(&features, &preds, 0.5);
-        assert!((d.rotation_deg - 0.0).abs() < 1e-9, "deg={}", d.rotation_deg);
+        assert!(
+            (d.rotation_deg - 0.0).abs() < 1e-9,
+            "deg={}",
+            d.rotation_deg
+        );
     }
 
     const TRIVIAL_MANIFEST: &str = r#"{

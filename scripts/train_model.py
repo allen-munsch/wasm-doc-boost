@@ -158,13 +158,25 @@ def _template_groups(filenames):
 
 def split_groups(X, y, filenames, rotation_deg):
     groups = _template_groups(filenames)
+    # Text-only pages are synthetic is_digital augmentation (v0.5.2): the
+    # doc-trait gate baseline (report_v6) predates them, and giving each one
+    # its own group re-partitions the template split so the doc-trait test set
+    # no longer matches baseline. Keep them train-only so is_digital still
+    # learns them while the held-out partition stays comparable to baseline.
+    n = len(filenames)
+    idx = np.arange(n)
+    is_textonly = np.asarray(["textonly" in f for f in filenames])
+    splittable = idx[~is_textonly]
+    groups_sp = groups[~is_textonly]
     gss1 = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
-    train_idx, rest_idx = next(gss1.split(X, groups=groups))
+    train_sp, rest_sp = next(gss1.split(splittable, groups=groups_sp))
     gss2 = GroupShuffleSplit(n_splits=1, test_size=0.5, random_state=43)
-    cal_idx, test_idx = next(gss2.split(rest_idx, groups=groups[rest_idx]))
-    cal_idx, test_idx = rest_idx[cal_idx], rest_idx[test_idx]
+    cal_sp, test_sp = next(gss2.split(rest_sp, groups=groups_sp[rest_sp]))
+    cal_idx, test_idx = rest_sp[cal_sp], rest_sp[test_sp]
+    train_idx = np.concatenate([splittable[train_sp], idx[is_textonly]])
     print(
-        f"Train: {len(train_idx)} ({len(set(groups[train_idx]))} groups), "
+        f"Train: {len(train_idx)} ({len(set(groups[train_idx]))} groups, "
+        f"+{is_textonly.sum()} textonly), "
         f"Cal: {len(cal_idx)} ({len(set(groups[cal_idx]))} groups), "
         f"Test: {len(test_idx)} ({len(set(groups[test_idx]))} groups) "
         f"(grouped by template where known, else base image)"
@@ -458,7 +470,7 @@ def export_merged_model(models, output_path, tau, calibration=None, label_thresh
     manifest = {
         "labels": LABEL_NAMES,
         "tau": tau,
-        "version": "0.5.0",
+        "version": "0.5.3",
         "trees": all_trees,
         "trees_per_label": trees_per_label,
         "confidence_calibration": calibration,

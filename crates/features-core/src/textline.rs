@@ -285,12 +285,7 @@ pub fn textline_flip_best_axis(
 /// Nearest-neighbour rotate of grayscale to a max(w,h) square, paper = 255.
 /// Cheaper than bilinear; used only for axis-candidate SCORING, where we need
 /// line-band structure, not 1-2px stroke fidelity.
-fn rotate_gray_square_nn(
-    gray: &[f64],
-    width: usize,
-    height: usize,
-    deg: f64,
-) -> (Vec<f64>, usize) {
+fn rotate_gray_square_nn(gray: &[f64], width: usize, height: usize, deg: f64) -> (Vec<f64>, usize) {
     let size = width.max(height);
     if size == 0 {
         return (Vec::new(), 0);
@@ -364,12 +359,7 @@ fn otsu256(gray: &[f64]) -> f64 {
 /// Cheap candidate-axis line quality: NN-rotate + Otsu threshold + row-run
 /// band count. Only the ORDERING among radon's top-4 axes matters, so the
 /// cheaper binarization and nearest-neighbour sampling are fine.
-fn cheap_line_quality(
-    gray: &[f64],
-    width: usize,
-    height: usize,
-    axis_rad: f64,
-) -> (f64, f64) {
+pub fn cheap_line_quality(gray: &[f64], width: usize, height: usize, axis_rad: f64) -> (f64, f64) {
     let axis_deg = axis_rad.to_degrees() % 180.0;
     let deskew_deg = if axis_deg < 1.5 || axis_deg > 178.5 {
         0.0
@@ -1007,7 +997,13 @@ mod tests {
         assert_eq!(size, 2);
         let expect = [20.0, 40.0, 10.0, 30.0];
         for (i, &e) in expect.iter().enumerate() {
-            assert!((out[i] - e).abs() < 1e-9, "out[{}]={} expect={}", i, out[i], e);
+            assert!(
+                (out[i] - e).abs() < 1e-9,
+                "out[{}]={} expect={}",
+                i,
+                out[i],
+                e
+            );
         }
     }
 

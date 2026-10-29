@@ -103,7 +103,7 @@ pub struct RotationDecision {
     pub needs_review: bool,
     /// Quarter-turn decision (0/90/180/270), the nearest multiple of 90.
     pub quarter: f64,
-    /// Signed fine residual `rotation_deg - quarter` in (-45, 45]. Not
+    /// Signed deskew residual `quarter - rotation_deg` in (-45, 45]. Not
     /// snapped: a real 0.5-1.0 deg tilt survives the fold-snap.
     pub skew_deg: f64,
     /// The axis (fine angle) is trustworthy even if the flip bit is not.
@@ -218,33 +218,21 @@ pub fn combine_rotation_calibrated(
         .map(|m| (m + core::f64::consts::FRAC_PI_2).rem_euclid(core::f64::consts::PI))
         .unwrap_or_else(|| features[RADON_AXIS_INDEX]);
 
-    let mut axis_rad = features[RADON_AXIS_INDEX];
-    // Independent axis consensus: the boundary minAreaRect and the docstrum
-    // inter-row direction are near-perfect on bounded invoices, while the
-    // radon response can lock onto a diagonal graphic (~50 deg off) or carry
-    // a few degrees of fold bias. When both independent votes agree, use them
-    // to correct the radon axis (previously they were only reported as an
-    // agreement count, never used to fix the answer).
-    if boundary_visible >= 0.5
-        && docstrum_conc >= DOCSTRUM_CONCENTRATION_MIN
-        && axis_err_rad(boundary_axis, docstrum_axis) <= AXIS_AGREE_TOLERANCE_RAD
-    {
-        let consensus = boundary_axis;
-        if axis_err_rad(consensus, axis_rad) > AXIS_AGREE_TOLERANCE_RAD {
-            axis_rad = consensus;
-        } else {
-            let cdeg = consensus.to_degrees().rem_euclid(180.0);
-            if cdeg < 1.0 || cdeg > 179.0 || (cdeg - 90.0).abs() < 1.0 {
-                axis_rad = consensus;
-            }
-        }
-    }
+    // v0.4.0 behaviour: the deterministic radon axis is the answer; the
+    // boundary/docstrum estimates are REPORTED as agreement votes only. A
+    // v0.5.0 "consensus override" let boundary+docstrum flip the radon axis
+    // on 90/270 rotated born-digital invoices (sideways pages read as upright
+    // at high confidence, not flagged) — feedback.txt section 2's dangerous
+    // failure mode. Do not override the radon axis here.
+    let axis_rad = features[RADON_AXIS_INDEX];
 
     let mut axis_deg = axis_rad.to_degrees().rem_euclid(180.0);
-    // Fold-snap: the mod-180 axis is blind to the 0/180 fold, so snap only the
-    // genuinely ambiguous sub-quarter-degree band. With the S2 fine axis, a
-    // real 0.5-1.0 deg tilt must survive (the old 1.0 deg band erased it).
-    if axis_deg < 0.25 || axis_deg > 179.75 {
+    // Fold-snap: the mod-180 axis is blind to the 0/180 fold. The S2 fine
+    // axis drifts up to ~0.45 deg on true-0 pages, so a 0.25 band lets those
+    // escape and report as 179.6 deg (accepted-flip + cardinal-pm1 misses).
+    // Snap at 0.75 deg: the gate skips |t|<=0.5 tilts and a real 1.0 deg tilt
+    // resolves to ~0.93 deg, so this band stays clear of true small tilts.
+    if axis_deg < 0.75 || axis_deg > 179.25 {
         axis_deg = 0.0;
     }
     let flip_p = preds[5];
@@ -315,11 +303,14 @@ pub fn combine_rotation_calibrated(
     };
 
     // S5: split the decision for callers that want to run their own deskew.
-    // `quarter` is the nearest multiple of 90; `skew_deg` is the signed fine
-    // residual in (-45, 45]. `axis_ok`/`flip_ok` split the uncertainty so an
-    // uncertain flip does not discard a precise axis.
-    let quarter = ((rotation_deg / 90.0).round() * 90.0) % 360.0;
-    let skew_deg = rotation_deg - quarter;
+    // `quarter` is the nearest multiple of 90; `skew_deg` is the signed deskew
+    // residual in (-45, 45] the caller applies after `quarter`
+    // (rotate(quarter) then rotate(skew_deg) == rotate(-rotation_deg) for the
+    // small-residual case the field is meant for). q keeps the unwrapped 360
+    // so rotation_deg near 0/360 yields skew +t instead of +t-360.
+    let q = (rotation_deg / 90.0).round() * 90.0;
+    let quarter = q % 360.0;
+    let skew_deg = q - rotation_deg;
     let flip_ok = flip_conf >= tau && !glyph_gbdt_disagrees;
     let axis_ok = trust_p >= tau;
 
@@ -539,19 +530,34 @@ impl ModelManifest {
     /// keep using `Model::from_xgboost_json(json, num_labels)` instead.
     pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
         let input: ModelInput = serde_json::from_str(json)?;
-        let (labels, tau, raw_trees, trees_per_label, version, confidence_calibration, label_thresholds) =
-            match input {
-                ModelInput::Manifest {
-                    labels,
-                    tau,
-                    trees,
-                    trees_per_label,
-                    version,
-                    confidence_calibration,
-                    label_thresholds,
-                } => (labels, tau, trees, trees_per_label, version, confidence_calibration, label_thresholds),
-                ModelInput::Flat(trees) => (Vec::new(), default_tau(), trees, None, None, None, None),
-            };
+        let (
+            labels,
+            tau,
+            raw_trees,
+            trees_per_label,
+            version,
+            confidence_calibration,
+            label_thresholds,
+        ) = match input {
+            ModelInput::Manifest {
+                labels,
+                tau,
+                trees,
+                trees_per_label,
+                version,
+                confidence_calibration,
+                label_thresholds,
+            } => (
+                labels,
+                tau,
+                trees,
+                trees_per_label,
+                version,
+                confidence_calibration,
+                label_thresholds,
+            ),
+            ModelInput::Flat(trees) => (Vec::new(), default_tau(), trees, None, None, None, None),
+        };
         if labels.is_empty() {
             return Err(serde_json::Error::custom(
                 "manifest has empty labels; use from_xgboost_json(json, num_labels) for legacy flat arrays",
@@ -845,22 +851,41 @@ mod tests {
         features[VOTE_FRAC_INDEX] = 0.9;
         let preds = [1.0, 1.0, 0.0, 0.0, 0.0, 0.99, 1.0];
         let d = combine_rotation(&features, &preds, 0.9);
-        assert!((d.rotation_deg - 0.0).abs() < 1e-9, "deg={}", d.rotation_deg);
-        assert!((d.confidence - 0.7777777777777778).abs() < 1e-9, "conf={}", d.confidence);
-        assert!(d.needs_review, "margin 0.4 conf 0.778 < tau 0.9 must review");
+        assert!(
+            (d.rotation_deg - 0.0).abs() < 1e-9,
+            "deg={}",
+            d.rotation_deg
+        );
+        assert!(
+            (d.confidence - 0.7777777777777778).abs() < 1e-9,
+            "conf={}",
+            d.confidence
+        );
+        assert!(
+            d.needs_review,
+            "margin 0.4 conf 0.778 < tau 0.9 must review"
+        );
         assert!((d.flip_vote_count - 16.0).abs() < 1e-9);
         assert!((d.flip_vote_agreement - 0.9).abs() < 1e-9);
 
         // Strong vote for flipped -> 180.
         features[VOTE_FRAC_INDEX] = 0.1;
         let d = combine_rotation(&features, &preds, 0.9);
-        assert!((d.rotation_deg - 180.0).abs() < 1e-9, "deg={}", d.rotation_deg);
+        assert!(
+            (d.rotation_deg - 180.0).abs() < 1e-9,
+            "deg={}",
+            d.rotation_deg
+        );
         assert!((d.flip_vote_agreement - 0.9).abs() < 1e-9);
 
         // Tie band defers to the head and reports head confidence.
         features[VOTE_FRAC_INDEX] = 0.5;
         let d = combine_rotation(&features, &preds, 0.9);
-        assert!((d.rotation_deg - 180.0).abs() < 1e-9, "deg={}", d.rotation_deg);
+        assert!(
+            (d.rotation_deg - 180.0).abs() < 1e-9,
+            "deg={}",
+            d.rotation_deg
+        );
         assert!((d.confidence - 0.99).abs() < 1e-12, "conf={}", d.confidence);
         assert!(!d.needs_review, "head conf 0.99 >= tau 0.9");
         assert!((d.flip_vote_agreement - 0.5).abs() < 1e-9);
@@ -868,8 +893,16 @@ mod tests {
         // Weak non-tie vote -> low confidence, needs_review fires.
         features[VOTE_FRAC_INDEX] = 0.6;
         let d = combine_rotation(&features, &preds, 0.9);
-        assert!((d.rotation_deg - 0.0).abs() < 1e-9, "deg={}", d.rotation_deg);
-        assert!((d.confidence - 0.1111111111111111).abs() < 1e-9, "conf={}", d.confidence);
+        assert!(
+            (d.rotation_deg - 0.0).abs() < 1e-9,
+            "deg={}",
+            d.rotation_deg
+        );
+        assert!(
+            (d.confidence - 0.1111111111111111).abs() < 1e-9,
+            "conf={}",
+            d.confidence
+        );
         assert!(d.needs_review);
     }
 
@@ -895,10 +928,19 @@ mod tests {
         let z = GLYPH_CAL_B0 + GLYPH_CAL_B1 * ev.sum_logodds + GLYPH_CAL_B2 * ev.count;
         let p_flip = sigmoid(z);
         let expected_conf = preds[6] * p_flip.max(1.0 - p_flip);
-        assert!((d.rotation_deg - 180.0).abs() < 1e-9, "deg={}", d.rotation_deg);
+        assert!(
+            (d.rotation_deg - 180.0).abs() < 1e-9,
+            "deg={}",
+            d.rotation_deg
+        );
         assert!((d.glyph_count - 20.0).abs() < 1e-9);
         assert!((d.glyph_logodds - 3.7).abs() < 1e-9);
-        assert!((d.confidence - expected_conf).abs() < 1e-9, "conf={} expected={}", d.confidence, expected_conf);
+        assert!(
+            (d.confidence - expected_conf).abs() < 1e-9,
+            "conf={} expected={}",
+            d.confidence,
+            expected_conf
+        );
         assert!(d.needs_review, "glyph conf {:.3} < tau 0.9", d.confidence);
 
         // Few glyphs -> falls back to the line-vote gate (head defer here).
@@ -907,7 +949,11 @@ mod tests {
             count: 2.0,
         };
         let d = combine_rotation_calibrated(&features, &preds, 0.9, None, Some(ev));
-        assert!((d.rotation_deg - 180.0).abs() < 1e-9, "deg={}", d.rotation_deg);
+        assert!(
+            (d.rotation_deg - 180.0).abs() < 1e-9,
+            "deg={}",
+            d.rotation_deg
+        );
         assert!((d.glyph_count - 2.0).abs() < 1e-9);
         assert!((d.confidence - 0.99).abs() < 1e-12, "conf={}", d.confidence);
         assert!(!d.needs_review, "head conf 0.99 >= tau 0.9");
@@ -927,10 +973,24 @@ mod tests {
         let z = GLYPH_CAL_B0 + GLYPH_CAL_B1 * 6.0 + GLYPH_CAL_B2 * 40.0;
         let p_flip = sigmoid(z);
         let expected_conf = 1.0 * p_flip.max(1.0 - p_flip);
-        assert!(expected_conf >= 0.9, "test needs glyph conf >= tau: {expected_conf}");
-        assert!((d.confidence - expected_conf).abs() < 1e-9, "conf={}", d.confidence);
-        assert!((d.rotation_deg - 180.0).abs() < 1e-9, "deg={}", d.rotation_deg);
-        assert!(d.needs_review, "glyph/GBDT disagreement must force review despite conf {expected_conf:.3} >= tau");
+        assert!(
+            expected_conf >= 0.9,
+            "test needs glyph conf >= tau: {expected_conf}"
+        );
+        assert!(
+            (d.confidence - expected_conf).abs() < 1e-9,
+            "conf={}",
+            d.confidence
+        );
+        assert!(
+            (d.rotation_deg - 180.0).abs() < 1e-9,
+            "deg={}",
+            d.rotation_deg
+        );
+        assert!(
+            d.needs_review,
+            "glyph/GBDT disagreement must force review despite conf {expected_conf:.3} >= tau"
+        );
     }
 
     #[test]
@@ -941,14 +1001,26 @@ mod tests {
 
         let preds = [0.9, 0.0, 0.0, 0.0, 0.0, 0.1, 0.8];
         let d = combine_rotation(&features, &preds, 0.9);
-        assert!((d.rotation_deg - 163.0).abs() < 1e-9, "deg={}", d.rotation_deg);
-        assert!((d.confidence - 0.8 * 0.9).abs() < 1e-12, "conf={}", d.confidence);
+        assert!(
+            (d.rotation_deg - 163.0).abs() < 1e-9,
+            "deg={}",
+            d.rotation_deg
+        );
+        assert!(
+            (d.confidence - 0.8 * 0.9).abs() < 1e-12,
+            "conf={}",
+            d.confidence
+        );
         assert!(d.needs_review, "conf 0.72 < tau 0.9 must review");
 
         // flip=1 -> rotation = 163 + 180 = 343.
         let preds = [1.0, 0.0, 0.0, 0.0, 0.0, 0.9, 1.0];
         let d = combine_rotation(&features, &preds, 0.5);
-        assert!((d.rotation_deg - 343.0).abs() < 1e-9, "deg={}", d.rotation_deg);
+        assert!(
+            (d.rotation_deg - 343.0).abs() < 1e-9,
+            "deg={}",
+            d.rotation_deg
+        );
         assert!((d.confidence - 0.9).abs() < 1e-12, "conf={}", d.confidence);
         assert!(!d.needs_review, "conf 0.9 >= tau 0.5 and is_document");
 
@@ -961,7 +1033,11 @@ mod tests {
         features[RADON_AXIS_INDEX] = 0.0;
         let preds = [1.0, 0.0, 0.0, 0.0, 0.0, 0.1, 1.0];
         let d = combine_rotation(&features, &preds, 0.5);
-        assert!((d.rotation_deg - 0.0).abs() < 1e-9, "deg={}", d.rotation_deg);
+        assert!(
+            (d.rotation_deg - 0.0).abs() < 1e-9,
+            "deg={}",
+            d.rotation_deg
+        );
     }
 
     #[test]
@@ -978,16 +1054,32 @@ mod tests {
         features[DOCSTRUM_MEAN_INDEX] = 120.0_f64.to_radians();
         let preds = [1.0, 0.0, 0.0, 0.0, 0.0, 0.1, 1.0];
         let d = combine_rotation(&features, &preds, 0.5);
-        assert!((d.axis_vote_count - 3.0).abs() < 1e-9, "votes={}", d.axis_vote_count);
-        assert!((d.axis_agreement - 1.0).abs() < 1e-9, "agree={}", d.axis_agreement);
+        assert!(
+            (d.axis_vote_count - 3.0).abs() < 1e-9,
+            "votes={}",
+            d.axis_vote_count
+        );
+        assert!(
+            (d.axis_agreement - 1.0).abs() < 1e-9,
+            "agree={}",
+            d.axis_agreement
+        );
 
         // boundary disagrees (80deg vs 30) and docstrum is diffuse -> only
         // radon + boundary count; agreement = 1/2.
         features[BOUNDARY_LONG_EDGE_INDEX] = 80.0_f64.to_radians();
         features[DOCSTRUM_CONC_INDEX] = 0.2;
         let d = combine_rotation(&features, &preds, 0.5);
-        assert!((d.axis_vote_count - 2.0).abs() < 1e-9, "votes={}", d.axis_vote_count);
-        assert!((d.axis_agreement - 0.5).abs() < 1e-9, "agree={}", d.axis_agreement);
+        assert!(
+            (d.axis_vote_count - 2.0).abs() < 1e-9,
+            "votes={}",
+            d.axis_vote_count
+        );
+        assert!(
+            (d.axis_agreement - 0.5).abs() < 1e-9,
+            "agree={}",
+            d.axis_agreement
+        );
     }
 
     #[test]

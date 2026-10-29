@@ -316,10 +316,11 @@ pub fn sauvola_binarize(gray: &[f64], width: usize, height: usize) -> Vec<bool> 
         for x in 0..width {
             let x0 = x.saturating_sub(half);
             let x1 = (x + half + 1).min(width);
-            let sum = integral[y1 * sw + x1] - integral[y0 * sw + x1]
-                - integral[y1 * sw + x0] + integral[y0 * sw + x0];
-            let sq = integral_sq[y1 * sw + x1] - integral_sq[y0 * sw + x1]
-                - integral_sq[y1 * sw + x0] + integral_sq[y0 * sw + x0];
+            let sum = integral[y1 * sw + x1] - integral[y0 * sw + x1] - integral[y1 * sw + x0]
+                + integral[y0 * sw + x0];
+            let sq =
+                integral_sq[y1 * sw + x1] - integral_sq[y0 * sw + x1] - integral_sq[y1 * sw + x0]
+                    + integral_sq[y0 * sw + x0];
             let n = ((y1 - y0) * (x1 - x0)) as f64;
             let mean = sum / n;
             let var = (sq / n) - mean * mean;

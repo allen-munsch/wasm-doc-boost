@@ -40,15 +40,122 @@ pub fn radon_curve_strided(
     sx: usize,
     sy: usize,
 ) -> Vec<f64> {
-    // Pad to a max(w,h) square, centred, filled with the border colour. The
-    // padding keeps every rotation inside the sampling canvas: a landscape
-    // canvas cannot hold its own 90-degree rotation (the content would be
-    // cropped to a strip), and a centre crop discards the top/bottom text
-    // lines of a portrait page. Padding preserves the full content while
-    // making the canvas rotation-invariant.
+    if width.max(height) == 0 {
+        return vec![0.0f64; RADON_BINS];
+    }
+    let (padded, size) = radon_pad(gray, width, height);
+    let mut curve = Vec::with_capacity(RADON_BINS);
+    for i in 0..RADON_BINS {
+        let deg = i as f64 * RADON_DEG_PER_BIN;
+        let g = angle_geom(size, deg, sx, sy);
+        let rows = row_sums_at(&padded, size, &g);
+        curve.push(variance_from_row_sums(&rows, g.ncols));
+    }
+    curve
+}
+
+/// Per-angle geometry constants for the projection-variance sampler.
+///
+/// `projection_variance_at` is decomposed into `angle_geom` + `row_sums_at`
+/// + `variance_from_row_sums` so a GPU backend can run only the sampling loop
+/// on the device while the host runs the same reduction, keeping the two
+/// backends bit-identical.
+#[derive(Clone, Copy)]
+pub struct AngleGeom {
+    pub cos_t: f64,
+    pub sin_t: f64,
+    pub cx: f64,
+    pub cy: f64,
+    pub last_x: f64,
+    pub last_y: f64,
+    pub step_x: f64,
+    pub step_y: f64,
+    pub ncols: usize,
+    pub nrows: usize,
+    pub sy: usize,
+}
+
+/// Geometry constants for one angle over a square `size`x`size` canvas,
+/// sampled every `sx`-th output column and `sy`-th output row — identical
+/// arithmetic to `projection_variance_at` (square callers only).
+pub fn angle_geom(size: usize, deg: f64, sx: usize, sy: usize) -> AngleGeom {
+    let sx = sx.max(1);
+    let sy = sy.max(1);
+    let rad = deg.to_radians();
+    let sin_t = libm::sin(rad);
+    let cos_t = libm::cos(rad);
+    let cx = (size as f64 - 1.0) / 2.0;
+    let cy = (size as f64 - 1.0) / 2.0;
+    let last_x = size as f64 - 1.0;
+    let last_y = size as f64 - 1.0;
+    let step_x = cos_t * sx as f64;
+    let step_y = sin_t * sx as f64;
+    let nrows = (size + sy - 1) / sy;
+    let ncols = (size + sx - 1) / sx;
+    AngleGeom {
+        cos_t,
+        sin_t,
+        cx,
+        cy,
+        last_x,
+        last_y,
+        step_x,
+        step_y,
+        ncols,
+        nrows,
+        sy,
+    }
+}
+
+/// Row sums of the horizontal projection of a square `size`x`size` canvas
+/// sampled at geometry `g` (nearest neighbour, in-order column accumulation —
+/// the exact arithmetic of `projection_variance_at`).
+pub fn row_sums_at(padded: &[f64], size: usize, g: &AngleGeom) -> Vec<f64> {
+    let mut row_sums = vec![0.0f64; g.nrows];
+    for (ry, slot) in row_sums.iter_mut().enumerate() {
+        let y = ry * g.sy;
+        let yc = y as f64 - g.cy;
+        let mut xs = g.cx - g.cx * g.cos_t - yc * g.sin_t;
+        let mut ys = g.cy - g.cx * g.sin_t + yc * g.cos_t;
+        let mut row_sum = 0.0;
+        for _ in 0..g.ncols {
+            let xi = (xs + 0.5).clamp(0.0, g.last_x) as usize;
+            let yi = (ys + 0.5).clamp(0.0, g.last_y) as usize;
+            row_sum += padded[yi * size + xi];
+            xs += g.step_x;
+            ys += g.step_y;
+        }
+        *slot = row_sum;
+    }
+    row_sums
+}
+
+/// Variance of the horizontal projection given its per-row sums: the final
+/// reduction of `projection_variance_at`, shared by the CPU and GPU paths.
+pub fn variance_from_row_sums(row_sums: &[f64], ncols: usize) -> f64 {
+    if row_sums.is_empty() || ncols == 0 {
+        return 0.0;
+    }
+    let nrows = row_sums.len();
+    let n = (nrows * ncols) as f64;
+    let total: f64 = row_sums.iter().sum();
+    let mean = total / n;
+    let mut var = 0.0;
+    for &row_sum in row_sums.iter() {
+        let row_mean = row_sum / ncols as f64;
+        let d = row_mean - mean;
+        var += d * d;
+    }
+    var / nrows as f64
+}
+
+/// Square-pad with the border median (the document background), returning the
+/// padded `size`x`size` buffer and `size`. Shared by the CPU curve and the
+/// GPU backend so both sample the identical canvas.
+pub fn radon_pad(gray: &[f64], width: usize, height: usize) -> (Vec<f64>, usize) {
     let size = width.max(height);
     if size == 0 {
-        return vec![0.0f64; RADON_BINS];
+        return (Vec::new(), 0);
     }
     let fill = border_median(gray, width, height);
     let mut padded = vec![fill; size * size];
@@ -59,13 +166,7 @@ pub fn radon_curve_strided(
             padded[(y + oy) * size + (x + ox)] = gray[y * width + x];
         }
     }
-
-    let mut curve = Vec::with_capacity(RADON_BINS);
-    for i in 0..RADON_BINS {
-        let deg = i as f64 * RADON_DEG_PER_BIN;
-        curve.push(projection_variance_at(&padded, size, size, deg, sx, sy));
-    }
-    curve
+    (padded, size)
 }
 
 /// Median of the outer-frame pixels — the document's own background, used as
@@ -100,6 +201,10 @@ fn border_median(gray: &[f64], width: usize, height: usize) -> f64 {
 
 /// Variance of the horizontal projection of a square image rotated by `-deg`,
 /// sampling every `sx`-th output column and `sy`-th output row (1 = full).
+// Legacy single-angle sampler, kept as the parity-test oracle: the test
+// `helpers_match_projection_variance_at_bitwise` asserts the decomposed
+// helpers reproduce it bit-for-bit.
+#[allow(dead_code)]
 fn projection_variance_at(
     gray: &[f64],
     width: usize,
@@ -299,12 +404,7 @@ pub const FINE_HALF_WINDOW_DEG: f64 = 1.5;
 /// parabolic-refines the peak. Using the ink mask (not grayscale) ignores
 /// background gradients and shadows. Returns the refined axis in radians
 /// (mod pi).
-pub fn fine_axis(
-    gray: &[f64],
-    width: usize,
-    height: usize,
-    coarse_axis_rad: f64,
-) -> f64 {
+pub fn fine_axis(gray: &[f64], width: usize, height: usize, coarse_axis_rad: f64) -> f64 {
     if width == 0 || height == 0 {
         return coarse_axis_rad;
     }
@@ -334,12 +434,13 @@ pub fn fine_axis(
     let mut curve = Vec::with_capacity(n);
     for i in 0..n {
         let deg = coarse_deg - FINE_HALF_WINDOW_DEG + i as f64 * FINE_STEP_DEG;
-        curve.push(projection_variance_at(&mask, size, size, deg, 1, 1));
+        let g = angle_geom(size, deg, 2, 2);
+        let rows = row_sums_at(&mask, size, &g);
+        curve.push(variance_from_row_sums(&rows, g.ncols));
     }
     let (imax, _) = argmax(&curve);
     let refined_bin = parabolic_refine(&curve, imax);
-    let mut refined_deg =
-        (coarse_deg - FINE_HALF_WINDOW_DEG + refined_bin * FINE_STEP_DEG) % 180.0;
+    let mut refined_deg = (coarse_deg - FINE_HALF_WINDOW_DEG + refined_bin * FINE_STEP_DEG) % 180.0;
     if refined_deg < 0.0 {
         refined_deg += 180.0;
     }
@@ -420,7 +521,9 @@ mod tests {
             let curve = radon_curve(&gray, 256, 256);
             let (imax, _) = argmax(&curve);
             let coarse_rad = (parabolic_refine(&curve, imax) * RADON_DEG_PER_BIN).to_radians();
-            let fine = fine_axis(&gray, 256, 256, coarse_rad).to_degrees().rem_euclid(180.0);
+            let fine = fine_axis(&gray, 256, 256, coarse_rad)
+                .to_degrees()
+                .rem_euclid(180.0);
             assert!((fine - deg).abs() < 0.35, "deg={deg} fine={fine}");
         }
     }
@@ -496,6 +599,26 @@ mod tests {
         assert!((top_deg - 17.0).abs() < 1.5, "top_deg={top_deg}");
         for ax in &axes {
             assert!(*ax >= 0.0 && *ax < core::f64::consts::PI, "axis={ax}");
+        }
+    }
+
+    #[test]
+    fn helpers_match_projection_variance_at_bitwise() {
+        let size = 64usize;
+        let mut gray = vec![0.0f64; size * size];
+        for y in 0..size {
+            for x in 0..size {
+                gray[y * size + x] = ((x * 7 + y * 13) % 256) as f64;
+            }
+        }
+        for deg in [0.0, 3.0, 17.3, 45.0, 89.7, 123.456, 179.9] {
+            for (sx, sy) in [(1usize, 1usize), (2, 2), (3, 1)] {
+                let a = projection_variance_at(&gray, size, size, deg, sx, sy);
+                let g = angle_geom(size, deg, sx, sy);
+                let rows = row_sums_at(&gray, size, &g);
+                let b = variance_from_row_sums(&rows, g.ncols);
+                assert_eq!(a.to_bits(), b.to_bits(), "deg={deg} sx={sx} sy={sy}");
+            }
         }
     }
 }

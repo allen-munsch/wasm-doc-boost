@@ -53,7 +53,10 @@ pub fn extract_noise_shadow(gray: &[f64], width: usize, height: usize) -> Vec<f6
     features.push(residual_var);
     features.extend(crate::noise::jpeg_blockiness(gray, width, height));
     features.push(crate::noise::gradient_snr_given_residual(
-        gray, width, height, residual_var,
+        gray,
+        width,
+        height,
+        residual_var,
     ));
     features.extend(crate::shadow::shadow_features(gray, width, height));
     features
@@ -176,27 +179,191 @@ pub fn rotation_extract(
 /// Extract the canonical 124-feature vector: 100 core heuristics + 24 rotation signals.
 ///
 /// Canonical for the per-degree model (Phase 2 export + Phase 4 WASM).
+/// Backend function types. A GPU build of `py-features` injects its own radon
+/// curve and fine-axis functions; `features-core` stays `no_std` and CPU.
+pub type RadonCurveFn = fn(&[f64], usize, usize) -> Vec<f64>;
+pub type FineAxisFn = fn(&[f64], usize, usize, f64) -> f64;
+
 pub fn extract_all(pixels: &[u8], width: usize, height: usize) -> Vec<f64> {
-    let gray = crate::to_grayscale(pixels, width, height);
-    let mut features = extract_core(pixels, width, height);
-    features.extend(rotation_features(&gray, pixels, width, height));
+    extract_all_with_radon(
+        pixels,
+        width,
+        height,
+        crate::radon::radon_curve,
+        crate::radon::fine_axis,
+    )
+}
+
+/// Like [`extract_all`] but with injected radon curve / fine-axis backends
+/// (CPU, CUDA, or WebGPU) so a host crate can choose at runtime.
+pub fn extract_all_with_radon(
+    pixels: &[u8],
+    width: usize,
+    height: usize,
+    radon_fn: RadonCurveFn,
+    fine_fn: FineAxisFn,
+) -> Vec<f64> {
+    // Hybrid: trait core at k=4 (+ full-res noise/shadow), rotation = k=4
+    // coarse radon + S2 fine axis at FULL resolution + S3 flip/glyph at FULL resolution
+    // (the glyph classifier is trained on full-res crops; at k=2 its sign
+    // breaks on 180-flipped pages and cardinal flip recovery collapses).
+    let mut features = extract_core_hybrid(pixels, width, height);
+    let rot = rotation_extract_hybrid_with_radon(pixels, width, height, radon_fn, fine_fn);
+    features.extend(rot.features);
     features
 }
 
 /// Extract the rework feature vector plus the per-glyph flip evidence from
 /// the same winner deskew: `(features, glyph_sum_logodds, glyph_count)`.
 /// Positive glyph_sum_logodds = flipped, negative = upright.
-pub fn extract_all_with_glyph(
+pub fn extract_all_with_glyph(pixels: &[u8], width: usize, height: usize) -> (Vec<f64>, f64, f64) {
+    extract_all_with_glyph_with_radon(
+        pixels,
+        width,
+        height,
+        crate::radon::radon_curve,
+        crate::radon::fine_axis,
+    )
+}
+
+/// Backend-injectable variant of [`extract_all_with_glyph`].
+pub fn extract_all_with_glyph_with_radon(
     pixels: &[u8],
     width: usize,
     height: usize,
+    radon_fn: RadonCurveFn,
+    fine_fn: FineAxisFn,
 ) -> (Vec<f64>, f64, f64) {
-    let gray = crate::to_grayscale(pixels, width, height);
-    let mut features = extract_core(pixels, width, height);
-    let rot = rotation_extract(&gray, pixels, width, height);
+    let mut features = extract_core_hybrid(pixels, width, height);
+    let rot = rotation_extract_hybrid_with_radon(pixels, width, height, radon_fn, fine_fn);
     features.extend(rot.features);
     let (sum_logodds, count) = crate::glyph::glyph_logodds_from_crops(&rot.glyph_crops);
     (features, sum_logodds, count as f64)
+}
+
+/// Box-downsample RGB by integer factor `k` (averaging), for the
+/// hybrid-resolution path. k=1 returns the input unchanged.
+pub fn downsample_rgb(
+    pixels: &[u8],
+    width: usize,
+    height: usize,
+    k: usize,
+) -> (Vec<u8>, usize, usize) {
+    if k <= 1 {
+        return (pixels.to_vec(), width, height);
+    }
+    let nw = width / k;
+    let nh = height / k;
+    if nw == 0 || nh == 0 {
+        return (pixels.to_vec(), width, height);
+    }
+    let mut out = Vec::with_capacity(nw * nh * 3);
+    let half = ((k * k) / 2) as u32;
+    let div = (k * k) as u32;
+    for y in 0..nh {
+        for x in 0..nw {
+            let mut r = 0u32;
+            let mut g = 0u32;
+            let mut b = 0u32;
+            for dy in 0..k {
+                let row = (y * k + dy) * width;
+                for dx in 0..k {
+                    let i = (row + x * k + dx) * 3;
+                    r += pixels[i] as u32;
+                    g += pixels[i + 1] as u32;
+                    b += pixels[i + 2] as u32;
+                }
+            }
+            out.push(((r + half) / div) as u8);
+            out.push(((g + half) / div) as u8);
+            out.push(((b + half) / div) as u8);
+        }
+    }
+    (out, nw, nh)
+}
+
+/// Core 100 features at k=4 (128px long edge) with the 9 noise/shadow
+/// features recomputed at k=2 (256px long edge) and spliced into 55..=63.
+/// k=2 is the best reproducible operating point for is_shadow with the fixed
+/// (post-S2/S5) rotation features: full-res shadow regresses is_shadow
+/// (0.42) and perturbs the flip/trust heads (accepted_flip 0.0025), while
+/// k=2 holds is_shadow at ~0.47 and accepted_flip at ~0.001.
+pub fn extract_core_hybrid(pixels: &[u8], width: usize, height: usize) -> Vec<f64> {
+    let (core_px, cw, ch) = downsample_rgb(pixels, width, height, 4);
+    let mut features = extract_core(&core_px, cw, ch);
+    let (ns_px, nw, nh) = downsample_rgb(pixels, width, height, 2);
+    let ns_gray = crate::to_grayscale(&ns_px, nw, nh);
+    let ns = crate::extract_noise_shadow(&ns_gray, nw, nh);
+    features[NOISE_SHADOW_START..NOISE_SHADOW_START + ns.len()].copy_from_slice(&ns);
+    features
+}
+
+/// Hybrid rotation extraction: coarse radon + S2 fine axis at FULL resolution
+/// (the axis is the accuracy-critical signal — v0.5.0's k=4 radon regressed
+/// rotation 99.5% -> 79.3%), cheap candidate scoring at k=4, and S3
+/// flip/glyph at FULL resolution (the glyph classifier is trained on
+/// full-res crops; k=2 breaks its sign on 180-flipped pages).
+/// Same 24-feature layout as `rotation_extract`.
+pub fn rotation_extract_hybrid(pixels: &[u8], width: usize, height: usize) -> RotationExtract {
+    rotation_extract_hybrid_with_radon(
+        pixels,
+        width,
+        height,
+        crate::radon::radon_curve,
+        crate::radon::fine_axis,
+    )
+}
+
+/// Backend-injectable variant of [`rotation_extract_hybrid`].
+pub fn rotation_extract_hybrid_with_radon(
+    pixels: &[u8],
+    width: usize,
+    height: usize,
+    radon_fn: RadonCurveFn,
+    fine_fn: FineAxisFn,
+) -> RotationExtract {
+    let full_gray = crate::to_grayscale(pixels, width, height);
+    let (core_px, cw, ch) = downsample_rgb(pixels, width, height, 4);
+    let (flip_px, fw, fh) = downsample_rgb(pixels, width, height, 2);
+    let core_gray = crate::to_grayscale(&core_px, cw, ch);
+    let flip_gray = crate::to_grayscale(&flip_px, fw, fh);
+
+    let curve = radon_fn(&core_gray, cw, ch);
+    let axes = crate::radon::radon_top_axes(&curve, 4);
+
+    // Winner selection at k=2 (256px): k=4 (128px) blurs small tilts on real
+    // invoices so the line-band count mis-orders near-tie axes (v0.5.0's
+    // tilt regression). The k=2 mask still resolves text bands at |t|<=12 deg.
+    let mut coarse_axis = axes[0];
+    let mut best_q = (0.0f64, 0.0f64);
+    for ax in &axes {
+        let q = crate::textline::cheap_line_quality(&flip_gray, fw, fh, *ax);
+        if q.0 > best_q.0 || (q.0 == best_q.0 && q.1 > best_q.1) {
+            coarse_axis = *ax;
+            best_q = q;
+        }
+    }
+
+    // S2: fine axis at full resolution, then S3: one deskew + flip + glyph at FULL resolution.
+    let refined = fine_fn(&full_gray, width, height, coarse_axis);
+    let best = crate::textline::textline_flip_at_axis(&full_gray, width, height, refined);
+    let (peakiness, peak_margin, concentration) = crate::radon::radon_summary(&curve);
+
+    let mut features = Vec::new();
+    features.push(best.axis);
+    features.push(peakiness);
+    features.push(peak_margin);
+    features.push(concentration);
+    features.extend_from_slice(&best.features[0..6]);
+    features.extend(crate::boundary::boundary_features(&core_px, cw, ch));
+    features.extend(crate::ink::docstrum_axis(&core_gray, cw, ch));
+    features.extend_from_slice(&best.features[6..14]);
+    RotationExtract {
+        features,
+        axis_rad: best.axis,
+        glyph_crops: best.glyph_crops,
+        glyph_count: best.glyph_count,
+    }
 }
 
 #[cfg(test)]

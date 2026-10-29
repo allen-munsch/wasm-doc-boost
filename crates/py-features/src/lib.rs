@@ -39,13 +39,14 @@
 //!
 //! ---
 
+mod backend;
+#[cfg(feature = "gpu")]
+mod cuda;
 mod engines;
 
 use std::sync::Mutex;
 
-use gbdt_core::{
-    combine_rotation_calibrated, GlyphEvidence, ModelManifest, DEFAULT_TAU, LABELS,
-};
+use gbdt_core::{combine_rotation_calibrated, GlyphEvidence, ModelManifest, DEFAULT_TAU, LABELS};
 use pdf_inspector_core::{types::ItemType, PdfType};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
@@ -108,7 +109,19 @@ fn extract_all(pixels: Vec<u8>, width: usize, height: usize) -> PyResult<Vec<f64
         )));
     }
 
-    Ok(features_core::extract_all(&pixels, width, height))
+    let (radon_fn, fine_fn) = backend::radon_pair(backend::selected());
+    Ok(features_core::extract_all_with_radon(
+        &pixels, width, height, radon_fn, fine_fn,
+    ))
+}
+
+/// Which radon backend `extract_all`/`predict` will use in this process.
+/// `PY_FEATURES_BACKEND=cpu|cuda|webgpu|auto` (auto = cuda when reachable,
+/// else cpu; webgpu is reserved for the wasm-bridge work and falls back to
+/// cpu on native builds until it lands).
+#[pyfunction]
+fn backend_info() -> String {
+    backend::name(backend::effective()).to_string()
 }
 
 /// Extract per-glyph 20x20 ink-density crops from the best-axis deskew.
@@ -132,7 +145,10 @@ fn extract_glyph_crops(pixels: Vec<u8>, width: usize, height: usize) -> PyResult
     let gray = features_core::to_grayscale(&pixels, width, height);
     let rot = features_core::rotation_extract(&gray, &pixels, width, height);
     let mut out = Vec::with_capacity(rot.glyph_count);
-    for c in rot.glyph_crops.chunks_exact(features_core::glyph::GLYPH_DIM) {
+    for c in rot
+        .glyph_crops
+        .chunks_exact(features_core::glyph::GLYPH_DIM)
+    {
         out.push(c.to_vec());
     }
     Ok(out)
@@ -405,7 +421,8 @@ fn resize_rgb_max_edge(
     let ratio = max_edge as f64 / longest as f64;
     let new_w = (width as f64 * ratio).round().max(1.0) as u32;
     let new_h = (height as f64 * ratio).round().max(1.0) as u32;
-    let resized = image::imageops::resize(&img, new_w, new_h, image::imageops::FilterType::Triangle);
+    let resized =
+        image::imageops::resize(&img, new_w, new_h, image::imageops::FilterType::Triangle);
     let (w, h) = resized.dimensions();
     (resized.into_raw(), w as usize, h as usize)
 }
@@ -443,8 +460,9 @@ fn predict(pixels: Vec<u8>, width: usize, height: usize) -> PyResult<Py<PyAny>> 
         })?
     };
 
+    let (radon_fn, fine_fn) = backend::radon_pair(backend::selected());
     let (features, glyph_logodds, glyph_count) =
-        features_core::extract_all_with_glyph(&pixels, width, height);
+        features_core::extract_all_with_glyph_with_radon(&pixels, width, height, radon_fn, fine_fn);
     let preds = manifest.model.predict(&features);
     let tau = if manifest.tau.is_finite() && manifest.tau > 0.0 {
         manifest.tau
@@ -533,6 +551,7 @@ fn combine_rotation(features: Vec<f64>, preds: Vec<f64>, tau: f64) -> PyResult<P
 #[pymodule]
 fn py_features(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(extract_all, m)?)?;
+    m.add_function(wrap_pyfunction!(backend_info, m)?)?;
     m.add_function(wrap_pyfunction!(extract_glyph_crops, m)?)?;
     m.add_function(wrap_pyfunction!(extract_glyph_logodds, m)?)?;
     m.add_function(wrap_pyfunction!(load_rgb_resized, m)?)?;

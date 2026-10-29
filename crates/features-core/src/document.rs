@@ -363,12 +363,7 @@ fn simplified_hough(binary: &[bool], width: usize, height: usize) -> f64 {
 }
 
 /// Ratio of mean saturation in low-edge vs. high-edge regions.
-fn saturation_edge_ratio(
-    pixels: &[u8],
-    gray: &[f64],
-    width: usize,
-    height: usize,
-) -> f64 {
+fn saturation_edge_ratio(pixels: &[u8], gray: &[f64], width: usize, height: usize) -> f64 {
     let n = width * height;
 
     // Compute edge magnitude per pixel (simple gradient)
