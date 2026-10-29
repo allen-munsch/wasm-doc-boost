@@ -33,6 +33,8 @@ export function classifyPdf(data) {
 }
 
 /**
+ * Per-degree rotation classification: 5 doc traits + flip + trust +
+ * deterministic `rotation_deg`, `rotation_confidence`, `needs_review`.
  * @param {Uint8Array} bytes
  * @returns {any}
  */
@@ -40,22 +42,6 @@ export function classify_file(bytes) {
     const ptr0 = passArray8ToWasm0(bytes, wasm.__wbindgen_malloc);
     const len0 = WASM_VECTOR_LEN;
     const ret = wasm.classify_file(ptr0, len0);
-    if (ret[2]) {
-        throw takeFromExternrefTable0(ret[1]);
-    }
-    return takeFromExternrefTable0(ret[0]);
-}
-
-/**
- * Per-degree rotation classification (v2): 5 doc traits + flip + trust +
- * deterministic `rotation_deg`, `rotation_confidence`, `needs_review`.
- * @param {Uint8Array} bytes
- * @returns {any}
- */
-export function classify_file_v2(bytes) {
-    const ptr0 = passArray8ToWasm0(bytes, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.classify_file_v2(ptr0, len0);
     if (ret[2]) {
         throw takeFromExternrefTable0(ret[1]);
     }
@@ -96,6 +82,11 @@ export function load_crf_model(json) {
 }
 
 /**
+ * Load the per-degree rework model manifest (v3; format-compatible with v2).
+ *
+ * Expects the v3 `model.json` shape `{labels, tau, version, trees}` written by
+ * `train_model_v2.py`. Also accepts a legacy flat tree array for
+ * compatibility, but then the 7-label count and the default tau apply.
  * @param {string} json
  */
 export function load_model(json) {
@@ -105,32 +96,6 @@ export function load_model(json) {
     if (ret[1]) {
         throw takeFromExternrefTable0(ret[0]);
     }
-}
-
-/**
- * Load the per-degree rework model manifest (v3; format-compatible with v2).
- *
- * Expects the v3 `model.json` shape `{labels, tau, version, trees}` written by
- * `train_model_v2.py`. Also accepts a legacy flat tree array for
- * compatibility, but then the 7-label count and the default tau apply.
- * @param {string} json
- */
-export function load_model_v2(json) {
-    const ptr0 = passStringToWasm0(json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.load_model_v2(ptr0, len0);
-    if (ret[1]) {
-        throw takeFromExternrefTable0(ret[0]);
-    }
-}
-
-/**
- * Manifest version of the loaded model (0 when unset or not loaded).
- * @returns {number}
- */
-export function model_version() {
-    const ret = wasm.model_version();
-    return ret >>> 0;
 }
 
 /**

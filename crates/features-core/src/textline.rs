@@ -12,13 +12,13 @@
 //! horizontal projection, estimate each line's x-height band from the mode of
 //! its column ink heights, then accumulate ink above/below that band.
 //!
-//! no_std; nearest-neighbour deskew (same sampling as radon.rs). Kept out of
+//! no_std; bilinear deskew with Sauvola local binarization (uneven-lighting tolerant). Kept out of
 //! `extract_all` until the Phase 3 retrain (103-feature contract).
 //!
 //! Reference: Bloomberg et al. 1995 (Leptonica pixOrientDetect); van
 //! Beusekom/Shafait/Breuel 2010 (geometric text-line model).
 
-use crate::ink::otsu_threshold;
+use crate::ink::sauvola_binarize;
 use crate::radon::radon_features;
 use alloc::vec::Vec;
 
@@ -51,7 +51,74 @@ struct LineStats {
 /// Deskew the ink mask by `axis_rad` and accumulate per-line ascender/
 /// descender/body ink. Shared by the flip-feature extractor and the
 /// line-quality scorer used for multi-candidate axis selection.
-fn analyze_lines(gray: &[f64], width: usize, height: usize, axis_rad: f64) -> LineStats {
+/// Deskewed grayscale + ink mask + line bands + per-line stats from ONE
+/// deskew pass. Gradient and character-weighting flip features share this
+/// with the asc/desc extractor so the image is rotated once, not twice.
+struct DeskewedLines {
+    gray: Vec<f64>,
+    mask: Vec<bool>,
+    size: usize,
+    bands: Vec<(usize, usize)>,
+    stats: LineStats,
+}
+
+/// Bilinear rotate of grayscale to a max(w,h) square, paper = 255.
+/// Bilinear (rather than nearest-neighbour) keeps 1-2px strokes from
+/// aliasing away at 512px long-edge export resolution.
+fn rotate_gray_square(gray: &[f64], width: usize, height: usize, deg: f64) -> (Vec<f64>, usize) {
+    let size = width.max(height);
+    if size == 0 {
+        return (Vec::new(), 0);
+    }
+    let ox = (size - width) / 2;
+    let oy = (size - height) / 2;
+    let mut padded = alloc::vec![255.0f64; size * size];
+    for y in 0..height {
+        for x in 0..width {
+            padded[(y + oy) * size + (x + ox)] = gray[y * width + x];
+        }
+    }
+
+    let rad = deg.to_radians();
+    let sin_t = libm::sin(rad);
+    let cos_t = libm::cos(rad);
+    let c = (size as f64 - 1.0) / 2.0;
+    let last = (size - 1) as f64;
+    let mut out = alloc::vec![255.0f64; size * size];
+    for y in 0..size {
+        let yc = y as f64 - c;
+        // xs/ys are linear in x (slope cos_t/sin_t): increment per column
+        // rather than rebuilding the affine map per pixel. xsc/ysc are
+        // clamped to [0, last] before the cast, so `as usize` truncates
+        // toward zero == floor — no libm::floor per pixel.
+        let mut xs = c - c * cos_t - yc * sin_t;
+        let mut ys = c - c * sin_t + yc * cos_t;
+        for x in 0..size {
+            let xsc = xs.clamp(0.0, last);
+            let ysc = ys.clamp(0.0, last);
+            let x0 = xsc as usize;
+            let y0 = ysc as usize;
+            let fx = xsc - x0 as f64;
+            let fy = ysc - y0 as f64;
+            let x1 = (x0 + 1).min(size - 1);
+            let y1 = (y0 + 1).min(size - 1);
+            let v00 = padded[y0 * size + x0];
+            let v10 = padded[y0 * size + x1];
+            let v01 = padded[y1 * size + x0];
+            let v11 = padded[y1 * size + x1];
+            out[y * size + x] = (1.0 - fx) * (1.0 - fy) * v00
+                + fx * (1.0 - fy) * v10
+                + (1.0 - fx) * fy * v01
+                + fx * fy * v11;
+            xs += cos_t;
+            ys += sin_t;
+        }
+    }
+    (out, size)
+}
+
+/// Threshold, deskew (one pass), find line bands, and accumulate asc/desc.
+fn deskew_analyze(gray: &[f64], width: usize, height: usize, axis_rad: f64) -> DeskewedLines {
     let mut stats = LineStats {
         asc_total: 0,
         desc_total: 0,
@@ -60,10 +127,14 @@ fn analyze_lines(gray: &[f64], width: usize, height: usize, axis_rad: f64) -> Li
         n_upright: 0,
     };
     if width == 0 || height == 0 {
-        return stats;
+        return DeskewedLines {
+            gray: Vec::new(),
+            mask: Vec::new(),
+            size: 0,
+            bands: Vec::new(),
+            stats,
+        };
     }
-    let threshold = otsu_threshold(gray);
-    let mask: Vec<bool> = gray.iter().map(|&v| v <= threshold).collect();
     // radon's axis is the text-line angle mod 180; the text line angle is
     // (180 - axis_deg) mod 180, so deskewing by axis_deg - 180 brings text
     // lines to 0 deg WITHOUT a 180 flip (fold-free away from the 0/180 wrap:
@@ -78,11 +149,12 @@ fn analyze_lines(gray: &[f64], width: usize, height: usize, axis_rad: f64) -> Li
     } else {
         axis_deg - 180.0
     };
-    let (deskewed, size) = rotate_mask_square(&mask, width, height, deskew_deg);
-    let bands = find_line_bands(&deskewed, size, size);
+    let (gray_sq, size) = rotate_gray_square(gray, width, height, deskew_deg);
+    let mask: Vec<bool> = sauvola_binarize(&gray_sq, size, size);
+    let bands = find_line_bands(&mask, size, size);
 
     for &(y0, y1) in &bands {
-        let (asc, desc, body) = line_asc_desc(&deskewed, size, y0, y1);
+        let (asc, desc, body) = line_asc_desc(&mask, size, y0, y1);
         if body == 0 {
             continue;
         }
@@ -94,7 +166,18 @@ fn analyze_lines(gray: &[f64], width: usize, height: usize, axis_rad: f64) -> Li
             stats.n_upright += 1;
         }
     }
-    stats
+    DeskewedLines {
+        gray: gray_sq,
+        mask,
+        size,
+        bands,
+        stats,
+    }
+}
+
+/// Per-line asc/desc stats for one deskew axis (line-quality scorer uses this).
+fn analyze_lines(gray: &[f64], width: usize, height: usize, axis_rad: f64) -> LineStats {
+    deskew_analyze(gray, width, height, axis_rad).stats
 }
 
 pub fn textline_flip_features_with_axis(
@@ -104,9 +187,17 @@ pub fn textline_flip_features_with_axis(
     axis_rad: f64,
 ) -> Vec<f64> {
     if width == 0 || height == 0 {
-        return alloc::vec![0.0; 6];
+        return alloc::vec![0.0; 14];
     }
-    let s = analyze_lines(gray, width, height, axis_rad);
+    let d = deskew_analyze(gray, width, height, axis_rad);
+    flip_features_from_lines(&d)
+}
+
+/// 14 flip features from an ALREADY deskewed line analysis (no re-deskew).
+/// Shared by the single-axis path above and the multi-axis selector below so
+/// the winner is deskewed exactly once.
+fn flip_features_from_lines(d: &DeskewedLines) -> Vec<f64> {
+    let s = &d.stats;
     let flip_score = if s.asc_total + s.desc_total > 0 {
         (s.asc_total as f64 - s.desc_total as f64) / (s.asc_total + s.desc_total) as f64
     } else {
@@ -128,13 +219,515 @@ pub fn textline_flip_features_with_axis(
         (0.0, 0.0, 0.0)
     };
 
-    alloc::vec![
+    let mut feats = alloc::vec![
         flip_score,
         vote_frac,
         s.n_valid as f64,
         asc_frac,
         desc_frac,
         body_frac,
+    ];
+    let grad = gradient_flip_features(&d.gray, &d.mask, d.size, &d.bands);
+    let chars = char_flip_features(&d.mask, d.size, &d.bands);
+    feats.extend_from_slice(&grad);
+    feats.extend_from_slice(&chars);
+    feats
+}
+
+/// Best-axis flip analysis: winner axis, 14 flip features, and the per-glyph
+/// classifier crops from the SAME winner deskew (no extra rotation pass).
+pub struct BestAxisFlip {
+    pub axis: f64,
+    pub features: Vec<f64>,
+    pub glyph_crops: Vec<f32>,
+    pub glyph_count: usize,
+}
+
+/// Select the best text-line axis among `axes` by (n_valid, total ink), then
+/// return the winner's flip features and glyph crops from a single deskew of
+/// the winner. This replaces the old rotation_features loop (4x
+/// textline_line_quality) + a 5th deskew with exactly one deskew per candidate
+/// and no extra pass.
+pub fn textline_flip_best_axis(
+    gray: &[f64],
+    width: usize,
+    height: usize,
+    axes: &[f64],
+) -> BestAxisFlip {
+    let mut best_axis = axes[0];
+    let mut best_lines: Option<DeskewedLines> = None;
+    let mut best_quality = (0.0f64, 0.0f64);
+    for ax in axes {
+        let d = deskew_analyze(gray, width, height, *ax);
+        let n_lines = d.stats.n_valid as f64;
+        let ink = (d.stats.asc_total + d.stats.desc_total + d.stats.body_total) as f64;
+        let better = best_lines.is_none()
+            || n_lines > best_quality.0
+            || (n_lines == best_quality.0 && ink > best_quality.1);
+        if better {
+            best_axis = *ax;
+            best_quality = (n_lines, ink);
+            best_lines = Some(d);
+        }
+    }
+    let best = best_lines.expect("axes non-empty");
+    let features = flip_features_from_lines(&best);
+    let glyph_crops = crate::glyph::glyph_crops_from_mask(&best.mask, best.size, &best.bands);
+    let glyph_count = glyph_crops.len() / crate::glyph::GLYPH_DIM;
+    BestAxisFlip {
+        axis: best_axis,
+        features,
+        glyph_crops,
+        glyph_count,
+    }
+}
+
+/// Nearest-neighbour rotate of grayscale to a max(w,h) square, paper = 255.
+/// Cheaper than bilinear; used only for axis-candidate SCORING, where we need
+/// line-band structure, not 1-2px stroke fidelity.
+fn rotate_gray_square_nn(gray: &[f64], width: usize, height: usize, deg: f64) -> (Vec<f64>, usize) {
+    let size = width.max(height);
+    if size == 0 {
+        return (Vec::new(), 0);
+    }
+    let ox = (size - width) / 2;
+    let oy = (size - height) / 2;
+    let mut padded = alloc::vec![255.0f64; size * size];
+    for y in 0..height {
+        for x in 0..width {
+            padded[(y + oy) * size + (x + ox)] = gray[y * width + x];
+        }
+    }
+    let rad = deg.to_radians();
+    let sin_t = libm::sin(rad);
+    let cos_t = libm::cos(rad);
+    let c = (size as f64 - 1.0) / 2.0;
+    let last = (size - 1) as f64;
+    let mut out = alloc::vec![255.0f64; size * size];
+    for y in 0..size {
+        let yc = y as f64 - c;
+        let mut xs = c - c * cos_t - yc * sin_t;
+        let mut ys = c - c * sin_t + yc * cos_t;
+        for x in 0..size {
+            let xi = (xs + 0.5).clamp(0.0, last) as usize;
+            let yi = (ys + 0.5).clamp(0.0, last) as usize;
+            out[y * size + x] = padded[yi * size + xi];
+            xs += cos_t;
+            ys += sin_t;
+        }
+    }
+    (out, size)
+}
+
+/// Otsu threshold on a grayscale slice (256-bin histogram).
+fn otsu256(gray: &[f64]) -> f64 {
+    let mut hist = [0u32; 256];
+    for &v in gray {
+        let idx = (v.clamp(0.0, 255.0)) as usize;
+        hist[idx.min(255)] += 1;
+    }
+    let total = gray.len() as f64;
+    let mut sum_all = 0.0f64;
+    for (i, &h) in hist.iter().enumerate() {
+        sum_all += i as f64 * h as f64;
+    }
+    let mut best_t = 128.0f64;
+    let mut best_var = -1.0f64;
+    let mut w_b = 0.0f64;
+    let mut sum_b = 0.0f64;
+    for (i, &h) in hist.iter().enumerate() {
+        w_b += h as f64;
+        if w_b < 1.0 {
+            continue;
+        }
+        let w_f = total - w_b;
+        if w_f < 1.0 {
+            break;
+        }
+        sum_b += i as f64 * h as f64;
+        let m_b = sum_b / w_b;
+        let m_f = (sum_all - sum_b) / w_f;
+        let between = w_b * w_f * (m_b - m_f) * (m_b - m_f);
+        if between > best_var {
+            best_var = between;
+            best_t = i as f64;
+        }
+    }
+    best_t
+}
+
+/// Cheap candidate-axis line quality: NN-rotate + Otsu threshold + row-run
+/// band count. Only the ORDERING among radon's top-4 axes matters, so the
+/// cheaper binarization and nearest-neighbour sampling are fine.
+pub fn cheap_line_quality(gray: &[f64], width: usize, height: usize, axis_rad: f64) -> (f64, f64) {
+    let axis_deg = axis_rad.to_degrees() % 180.0;
+    let deskew_deg = if axis_deg < 1.5 || axis_deg > 178.5 {
+        0.0
+    } else {
+        axis_deg - 180.0
+    };
+    let (rot, size) = rotate_gray_square_nn(gray, width, height, deskew_deg);
+    let thr = otsu256(&rot);
+    let mut n = 0.0f64;
+    let mut ink = 0.0f64;
+    let mut y = 0usize;
+    while y < size {
+        let mut row_ink = 0usize;
+        for x in 0..size {
+            if rot[y * size + x] <= thr {
+                row_ink += 1;
+            }
+        }
+        if row_ink == 0 {
+            y += 1;
+            continue;
+        }
+        let y0 = y;
+        let mut y1 = y + 1;
+        let mut band_ink = row_ink;
+        while y1 < size {
+            let mut ri = 0usize;
+            for x in 0..size {
+                if rot[y1 * size + x] <= thr {
+                    ri += 1;
+                }
+            }
+            if ri == 0 {
+                break;
+            }
+            band_ink += ri;
+            y1 += 1;
+        }
+        ink += band_ink as f64;
+        if y1 - y0 >= 2 {
+            n += 1.0;
+        }
+        y = y1;
+    }
+    (n, ink)
+}
+
+/// Flip analysis at a SPECIFIC axis (S3): one deskew at the refined fine-axis
+/// value, then the 14 flip features + per-glyph crops from that single deskew.
+///
+/// The fine stage S2 refines the coarse radon axis to ~0.1 deg; running the
+/// flip evidence on that straightened mask (instead of the 3-deg coarse axis)
+/// keeps ascender/descender shape sharp so the glyph/line-vote gate works at
+/// any tilt, not just the cardinals.
+pub fn textline_flip_at_axis(
+    gray: &[f64],
+    width: usize,
+    height: usize,
+    axis_rad: f64,
+) -> BestAxisFlip {
+    if width == 0 || height == 0 {
+        return BestAxisFlip {
+            axis: axis_rad,
+            features: alloc::vec![0.0; 14],
+            glyph_crops: Vec::new(),
+            glyph_count: 0,
+        };
+    }
+    let d = deskew_analyze(gray, width, height, axis_rad);
+    let features = flip_features_from_lines(&d);
+    let glyph_crops = crate::glyph::glyph_crops_from_mask(&d.mask, d.size, &d.bands);
+    let glyph_count = glyph_crops.len() / crate::glyph::GLYPH_DIM;
+    BestAxisFlip {
+        axis: axis_rad,
+        features,
+        glyph_crops,
+        glyph_count,
+    }
+}
+
+/// Best-axis selection with CHEAP candidate scoring (NN + Otsu at the caller's
+/// chosen low resolution) and the full bilinear+Sauvola flip analysis only on
+/// the winner. `core_gray` is the low-res image for scoring; `gray` is the
+/// higher-res image for the winner's flip features and glyph crops.
+pub fn textline_flip_best_axis_cheap(
+    core_gray: &[f64],
+    cw: usize,
+    ch: usize,
+    gray: &[f64],
+    width: usize,
+    height: usize,
+    axes: &[f64],
+) -> BestAxisFlip {
+    let mut best_axis = axes[0];
+    let mut best_q = (0.0f64, 0.0f64);
+    for ax in axes {
+        let (n, ink) = cheap_line_quality(core_gray, cw, ch, *ax);
+        if n > best_q.0 || (n == best_q.0 && ink > best_q.1) {
+            best_axis = *ax;
+            best_q = (n, ink);
+        }
+    }
+    let d = deskew_analyze(gray, width, height, best_axis);
+    let features = flip_features_from_lines(&d);
+    let glyph_crops = crate::glyph::glyph_crops_from_mask(&d.mask, d.size, &d.bands);
+    let glyph_count = glyph_crops.len() / crate::glyph::GLYPH_DIM;
+    BestAxisFlip {
+        axis: best_axis,
+        features,
+        glyph_crops,
+        glyph_count,
+    }
+}
+
+/// Tranche A: signed-vertical-gradient flip evidence on the deskewed image,
+/// restricted to text-line bands. Flip-antisymmetric under 180 deg:
+/// signed_vert_grad (mean signed Sobel-y), baseline_edge_weight (|gy| mass
+/// bottom vs top half), gy_skew (skewness of signed gy), and
+/// top_bottom_edge_sharpness (baselines are sharper/flatter than cap tops).
+fn gradient_flip_features(
+    gray: &[f64],
+    mask: &[bool],
+    size: usize,
+    bands: &[(usize, usize)],
+) -> [f64; 4] {
+    if size == 0 || bands.is_empty() {
+        return [0.0; 4];
+    }
+    let sobel = crate::edges::sobel(gray, size, size);
+
+    let mut sum_gy = 0.0f64;
+    let mut sum_abs = 0.0f64;
+    let mut bottom_abs = 0.0f64;
+    let mut top_abs = 0.0f64;
+    let mut sum2 = 0.0f64;
+    let mut n = 0.0f64;
+    for &(y0, y1) in bands {
+        let mid = (y0 + y1 - 1) as f64 / 2.0; // mid row excluded: antisymmetric under 180 flip
+        for y in y0..y1 {
+            let row = y * size;
+            for x in 0..size {
+                let gy = sobel.gy[row + x];
+                let a = gy.abs();
+                sum_gy += gy;
+                sum_abs += a;
+                sum2 += gy * gy;
+                n += 1.0;
+                if (y as f64) < mid {
+                    top_abs += a;
+                } else if (y as f64) > mid {
+                    bottom_abs += a;
+                }
+            }
+        }
+    }
+
+    let signed_vert_grad = if sum_abs > 1e-9 {
+        sum_gy / sum_abs
+    } else {
+        0.0
+    };
+    let baseline_edge_weight = if bottom_abs + top_abs > 1e-9 {
+        (bottom_abs - top_abs) / (bottom_abs + top_abs)
+    } else {
+        0.0
+    };
+
+    let gy_skew = if n >= 8.0 && sum_abs > 1e-9 {
+        let mu = sum_gy / n;
+        let var = sum2 / n - mu * mu;
+        if var > 1e-12 {
+            let sigma = libm::sqrt(var);
+            let mut sum3 = 0.0f64;
+            for &(y0, y1) in bands {
+                for y in y0..y1 {
+                    let row = y * size;
+                    for x in 0..size {
+                        let d = sobel.gy[row + x] - mu;
+                        sum3 += d * d * d;
+                    }
+                }
+            }
+            sum3 / (n * sigma * sigma * sigma)
+        } else {
+            0.0
+        }
+    } else {
+        0.0
+    };
+
+    let mut top_sum = 0.0f64;
+    let mut top_n = 0usize;
+    let mut bot_sum = 0.0f64;
+    let mut bot_n = 0usize;
+    for &(y0, y1) in bands {
+        for y in y0..y1 {
+            let row = y * size;
+            for x in 0..size {
+                if !mask[row + x] {
+                    continue;
+                }
+                let above_bg = y == 0 || !mask[(y - 1) * size + x];
+                let below_bg = y + 1 >= size || !mask[(y + 1) * size + x];
+                let a = sobel.gy[row + x].abs();
+                if above_bg && !below_bg {
+                    top_sum += a;
+                    top_n += 1;
+                } else if below_bg && !above_bg {
+                    bot_sum += a;
+                    bot_n += 1;
+                }
+            }
+        }
+    }
+    let top_bottom_edge_sharpness = if top_n > 0 && bot_n > 0 {
+        let mean_top = top_sum / top_n as f64;
+        let mean_bot = bot_sum / bot_n as f64;
+        let overall = (top_sum + bot_sum) / (top_n + bot_n) as f64;
+        if overall > 1e-9 {
+            (mean_top - mean_bot) / overall
+        } else {
+            0.0
+        }
+    } else {
+        0.0
+    };
+
+    [
+        signed_vert_grad,
+        baseline_edge_weight,
+        gy_skew,
+        top_bottom_edge_sharpness,
+    ]
+}
+
+/// Iterate glyph bounding boxes (column runs within line bands) from a
+/// deskewed ink mask. Shared by `char_flip_features` (tranche B) and the
+/// per-glyph 0-vs-180 classifier (`glyph` module): one slicing rule, one
+/// source of truth. A run is a maximal span of columns with >=1 ink pixel
+/// inside a band; runs with fewer than 6 ink pixels are dropped as specks.
+pub(crate) fn for_each_glyph_bbox(
+    mask: &[bool],
+    size: usize,
+    bands: &[(usize, usize)],
+    mut f: impl FnMut(usize, usize, usize, usize),
+) {
+    for &(y0, y1) in bands {
+        let band_h = y1 - y0;
+        if band_h < 4 {
+            continue;
+        }
+        let mut col_ink = alloc::vec![0u32; size];
+        for y in y0..y1 {
+            let row = y * size;
+            for x in 0..size {
+                if mask[row + x] {
+                    col_ink[x] += 1;
+                }
+            }
+        }
+        let mut x = 0usize;
+        while x < size {
+            if col_ink[x] == 0 {
+                x += 1;
+                continue;
+            }
+            let x0 = x;
+            let mut x1 = x + 1;
+            while x1 < size && col_ink[x1] > 0 {
+                x1 += 1;
+            }
+            let mut ink = 0usize;
+            for xx in x0..x1 {
+                ink += col_ink[xx] as usize;
+            }
+            if ink >= 6 {
+                f(x0, x1, y0, y1);
+            }
+            x = x1;
+        }
+    }
+}
+
+/// Tranche B: per-character vertical-mass asymmetry. Slices each line band
+/// into character-like runs at projection gaps and measures where each slice's
+/// ink sits (top-heavy vs bottom-heavy) — catches all-caps/digit lines whose
+/// x-height asc/desc is ~0.
+fn char_flip_features(mask: &[bool], size: usize, bands: &[(usize, usize)]) -> [f64; 4] {
+    let mut sum_offset = 0.0f64;
+    let mut sum_abs_offset = 0.0f64;
+    let mut n_slices = 0usize;
+    let mut n_top_heavy = 0usize;
+    let mut top_ink = 0usize;
+    let mut bottom_ink = 0usize;
+
+    // Band-level top/bottom ink (mid row excluded: antisymmetric under 180).
+    for &(y0, y1) in bands {
+        let band_h = (y1 - y0) as f64;
+        if band_h < 4.0 {
+            continue;
+        }
+        let band_mid = (y0 + y1 - 1) as f64 / 2.0;
+        for y in y0..y1 {
+            let row = y * size;
+            for x in 0..size {
+                if mask[row + x] {
+                    if (y as f64) < band_mid {
+                        top_ink += 1;
+                    } else if (y as f64) > band_mid {
+                        bottom_ink += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    // Per-character vertical-mass asymmetry via the shared glyph slicer.
+    for_each_glyph_bbox(mask, size, bands, |x0, x1, y0, y1| {
+        let band_h = (y1 - y0) as f64;
+        let band_mid = (y0 + y1 - 1) as f64 / 2.0;
+        let mut slice_ink = 0usize;
+        let mut slice_y = 0usize;
+        for xx in x0..x1 {
+            for y in y0..y1 {
+                if mask[y * size + xx] {
+                    slice_ink += 1;
+                    slice_y += y;
+                }
+            }
+        }
+        if slice_ink >= 6 {
+            let centroid = slice_y as f64 / slice_ink as f64;
+            let offset = (centroid - band_mid) / band_h;
+            sum_offset += offset;
+            sum_abs_offset += offset.abs();
+            n_slices += 1;
+            if offset < 0.0 {
+                n_top_heavy += 1;
+            }
+        }
+    });
+
+    let char_centroid_offset = if n_slices > 0 {
+        sum_offset / n_slices as f64
+    } else {
+        0.0
+    };
+    let char_topheavy_frac = if n_slices > 0 {
+        n_top_heavy as f64 / n_slices as f64
+    } else {
+        0.5
+    };
+    let char_asym_strength = if n_slices > 0 {
+        sum_abs_offset / n_slices as f64
+    } else {
+        0.0
+    };
+    let body_vert_bias = if top_ink + bottom_ink > 0 {
+        (bottom_ink as f64 - top_ink as f64) / (top_ink + bottom_ink) as f64
+    } else {
+        0.0
+    };
+
+    [
+        char_centroid_offset,
+        char_topheavy_frac,
+        char_asym_strength,
+        body_vert_bias,
     ]
 }
 
@@ -159,44 +752,8 @@ pub fn textline_line_quality(
     (s.n_valid as f64, ink)
 }
 
-/// Pad the mask to a max(w,h) square (paper = false) and rotate by `+deg`
-/// (same direction as PIL's rotate(+deg), nearest neighbour, border-clamped).
-/// Returns the square mask and its side length. Padding keeps every rotation
-/// inside the sampling canvas — the same reason radon.rs pads — so a landscape
-/// page deskewed by 90 degrees is not cropped to a strip before the flip
-/// measurement.
-fn rotate_mask_square(mask: &[bool], width: usize, height: usize, deg: f64) -> (Vec<bool>, usize) {
-    let size = width.max(height);
-    if size == 0 {
-        return (Vec::new(), 0);
-    }
-    let ox = (size - width) / 2;
-    let oy = (size - height) / 2;
-    let mut padded = alloc::vec![false; size * size];
-    for y in 0..height {
-        for x in 0..width {
-            padded[(y + oy) * size + (x + ox)] = mask[y * width + x];
-        }
-    }
-
-    let rad = deg.to_radians();
-    let sin_t = libm::sin(rad);
-    let cos_t = libm::cos(rad);
-    let c = (size as f64 - 1.0) / 2.0;
-    let mut out = alloc::vec![false; size * size];
-    for y in 0..size {
-        let yc = y as f64 - c;
-        for x in 0..size {
-            let xc = x as f64 - c;
-            let xs = xc * cos_t - yc * sin_t + c;
-            let ys = xc * sin_t + yc * cos_t + c;
-            let xi = (xs + 0.5).clamp(0.0, size as f64 - 1.0) as usize;
-            let yi = (ys + 0.5).clamp(0.0, size as f64 - 1.0) as usize;
-            out[y * size + x] = padded[yi * size + xi];
-        }
-    }
-    (out, size)
-}
+// rotate_mask_square removed: dead code (no callers). Its square-pad + NN
+// sampling concern is handled by rotate_gray_square, now bilinear.
 
 /// Text-line bands: maximal runs of rows that contain at least one ink pixel.
 /// Inter-line spacing is truly blank, so a single threshold of 1 separates
@@ -412,7 +969,7 @@ mod tests {
         );
         assert!(f_up[1] > 0.5, "vote_frac={}", f_up[1]);
         assert_eq!(f_up[2], 1.0, "n_lines={}", f_up[2]);
-        assert_eq!(f_up.len(), 6);
+        assert_eq!(f_up.len(), 14);
     }
 
     #[test]
@@ -432,12 +989,31 @@ mod tests {
     }
 
     #[test]
+    fn bilinear_rotate_90_exact() {
+        // 2x2 with distinct values; +90 deg maps integer centres exactly, so
+        // bilinear must reproduce the four values in their rotated places.
+        let gray = alloc::vec![10.0, 20.0, 30.0, 40.0];
+        let (out, size) = rotate_gray_square(&gray, 2, 2, 90.0);
+        assert_eq!(size, 2);
+        let expect = [20.0, 40.0, 10.0, 30.0];
+        for (i, &e) in expect.iter().enumerate() {
+            assert!(
+                (out[i] - e).abs() < 1e-9,
+                "out[{}]={} expect={}",
+                i,
+                out[i],
+                e
+            );
+        }
+    }
+
+    #[test]
     fn blank_image_returns_neutral() {
         let w = 32usize;
         let h = 32usize;
         let gray = alloc::vec![255.0f64; w * h];
         let f = textline_flip_features(&gray, w, h);
-        assert_eq!(f.len(), 6);
+        assert_eq!(f.len(), 14);
         assert!(f[0].abs() < 1e-12, "flip_score={}", f[0]);
         assert_eq!(f[2], 0.0);
     }

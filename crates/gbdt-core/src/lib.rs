@@ -11,7 +11,7 @@ use serde::de::Error as _;
 use serde::Deserialize;
 
 /// Per-degree rework (v3) labels: 5 doc traits + flip + trust.
-pub const LABELS_V2: [&str; 7] = [
+pub const LABELS: [&str; 7] = [
     "is_document",
     "is_digital",
     "is_paper",
@@ -38,6 +38,38 @@ pub const BODY_FRAC_INDEX: usize = 109;
 /// (0/90/180/270) axis. FATURA2 upright runs ~16 lines and |score| ~0.35-0.4.
 pub const FLIP_NLINES_MIN: f64 = 5.0;
 pub const FLIP_SCORE_MIN: f64 = 0.05;
+/// Half-width of the vote_frac tie band: inside |vote_frac - 0.5| <= this the
+/// line-vote evidence is ambiguous and the gate defers to the GBDT flip head.
+pub const VOTE_TIE_EPS: f64 = 0.05;
+
+/// Line-vote margin -> flip confidence, monotonic in |vote_frac - 0.5|.
+/// A unanimous vote (margin 0.5) is 1.0; the tie-band edge (margin =
+/// VOTE_TIE_EPS) is 0.0. Recalibrated on the calibration split (step 5).
+#[inline]
+fn vote_conf(margin: f64) -> f64 {
+    ((margin - VOTE_TIE_EPS) / (0.5 - VOTE_TIE_EPS)).clamp(0.0, 1.0)
+}
+
+/// Per-glyph flip evidence passed from features-core into the combine step.
+/// `sum_logodds` is the sum of per-glyph logistic log-odds (positive =
+/// flipped, negative = upright); `count` is the number of glyphs that voted.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GlyphEvidence {
+    pub sum_logodds: f64,
+    pub count: f64,
+}
+
+/// Minimum glyph count before the per-glyph shape evidence overrides the
+/// line-vote flip gate at a cardinal axis. Below this the summed log-odds is
+/// too noisy to trust.
+pub const GLYPH_COUNT_MIN: f64 = 8.0;
+
+/// Page-level calibration logistic: P(flipped) = sigmoid(b0 + b1*L + b2*N)
+/// with L = sum of per-glyph log-odds and N = glyph count. Fitted on the
+/// fatura2 calibration split by scripts/train_glyph_classifier.py.
+pub const GLYPH_CAL_B0: f64 = -0.00890701834;
+pub const GLYPH_CAL_B1: f64 = 0.374395665;
+pub const GLYPH_CAL_B2: f64 = 0.0126013738;
 
 /// Fallback operating point if the manifest does not carry one. The shipped
 /// value is pinned in model.json's manifest by tau calibration.
@@ -55,54 +87,248 @@ pub const DEFAULT_TAU: f64 = 0.90;
 /// the argmax lands on bin 0 (~0.01 deg) or bin 59 (~179.99 deg). Both are the
 /// SAME horizontal text; snap the fold region to 0 before combining, matching
 /// features-core/src/textline.rs.
-pub fn combine_rotation(features: &[f64], preds: &[f64], tau: f64) -> (f64, f64, bool) {
-    let axis_rad = features[RADON_AXIS_INDEX];
-    let mut axis_deg = axis_rad.to_degrees().rem_euclid(180.0);
-    if axis_deg < 1.0 || axis_deg > 179.0 {
-        axis_deg = 0.0;
-    }
-    let flip_p = preds[5];
-    let trust_p = preds[6];
+///
+/// The decision also carries the aggregation's counts and agreements so the
+/// caller can see how much evidence voted and how concentrated it was:
+///   flip_vote_count     = n_lines (text lines that voted on flip)
+///   flip_vote_agreement = winning-side line-vote fraction, [0.5, 1.0]
+///   axis_vote_count     = independent axis estimates available
+///   axis_agreement      = fraction of those estimates agreeing with the chosen
+///                         radon axis (boundary long-edge when visible; docstrum
+///                         link direction rotated 90deg when concentrated)
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RotationDecision {
+    pub rotation_deg: f64,
+    pub confidence: f64,
+    pub needs_review: bool,
+    /// Quarter-turn decision (0/90/180/270), the nearest multiple of 90.
+    pub quarter: f64,
+    /// Signed deskew residual `quarter - rotation_deg` in (-45, 45]. Not
+    /// snapped: a real 0.5-1.0 deg tilt survives the fold-snap.
+    pub skew_deg: f64,
+    /// The axis (fine angle) is trustworthy even if the flip bit is not.
+    pub axis_ok: bool,
+    /// The 0-vs-180 bit is trustworthy.
+    pub flip_ok: bool,
+    pub flip_vote_count: f64,
+    pub flip_vote_agreement: f64,
+    pub axis_vote_count: f64,
+    pub axis_agreement: f64,
+    pub glyph_count: f64,
+    pub glyph_logodds: f64,
+}
 
-    // v4 flip gate: at a cardinal axis the deterministic textline evidence is
-    // stronger than the GBDT flip head. If there are enough valid text lines
-    // and the ascender/descender signal is unambiguous, use it directly. This
-    // is what makes upright born-digital invoices stop flipping to 180.
-    let cardinal = axis_deg == 0.0 || (axis_deg - 90.0).abs() < 1.0;
-    let (flip, flip_conf) = if cardinal {
-        let n_lines = features.get(N_LINES_INDEX).copied().unwrap_or(0.0);
-        let flip_score = features.get(FLIP_SCORE_INDEX).copied().unwrap_or(0.0);
-        let vote_frac = features.get(VOTE_FRAC_INDEX).copied().unwrap_or(0.5);
-        let body_frac = features.get(BODY_FRAC_INDEX).copied().unwrap_or(0.0);
-        let is_digital = preds.get(1).copied().unwrap_or(0.0);
-        if n_lines >= FLIP_NLINES_MIN {
-            if is_digital >= 0.5 {
-                // Born-digital documents are generated upright, so at a
-                // cardinal axis they only flip when every signal agrees the
-                // text is upside down AND the text is not all-caps/digits
-                // (body_frac >= 0.9 has no reliable ascender/descender mass,
-                // and FATURA2 all-caps invoices otherwise flip wrongly).
-                let flipped = body_frac < 0.9 && vote_frac < 0.5 && flip_score < -FLIP_SCORE_MIN;
-                (if flipped { 1.0 } else { 0.0 }, 1.0)
-            } else if flip_score.abs() >= FLIP_SCORE_MIN {
-                (if flip_score < 0.0 { 1.0 } else { 0.0 }, 1.0)
-            } else {
-                let f = if flip_p >= 0.5 { 1.0 } else { 0.0 };
-                (f, flip_p.max(1.0 - flip_p))
-            }
+/// Feature indices for the axis-agreement diagnostic (see combine_rotation).
+pub const BOUNDARY_LONG_EDGE_INDEX: usize = 110;
+pub const BOUNDARY_VISIBLE_INDEX: usize = 113;
+pub const DOCSTRUM_MEAN_INDEX: usize = 114;
+pub const DOCSTRUM_CONC_INDEX: usize = 115;
+
+/// Axis estimates within this many radians of the chosen axis count as
+/// agreeing (10 degrees).
+pub const AXIS_AGREE_TOLERANCE_RAD: f64 = 0.174_532_925;
+
+/// Minimum docstrum concentration for its mean angle to be a usable axis
+/// estimate.
+pub const DOCSTRUM_CONCENTRATION_MIN: f64 = 0.5;
+
+/// Circular distance between two mod-pi axis angles, in [0, pi/2].
+#[inline]
+fn axis_err_rad(a: f64, b: f64) -> f64 {
+    let d = (a - b).rem_euclid(core::f64::consts::PI);
+    if d > core::f64::consts::FRAC_PI_2 {
+        core::f64::consts::PI - d
+    } else {
+        d
+    }
+}
+
+/// Number of points in the confidence calibration lookup table (21 bins on
+/// the [0,1] grid: index 0 = confidence 0.0, index 20 = confidence 1.0).
+pub const CALIBRATION_GRID: usize = 21;
+
+/// Apply an isotonic calibration curve (21 values on the [0,1] grid) to a raw
+/// confidence with linear interpolation. Identity when the curve is absent or
+/// malformed.
+pub fn calibrate_confidence(raw: f64, curve: &[f64]) -> f64 {
+    if curve.len() != CALIBRATION_GRID || raw.is_nan() {
+        return raw;
+    }
+    let x = raw.clamp(0.0, 1.0) * (CALIBRATION_GRID - 1) as f64;
+    let i = x.floor() as usize;
+    let j = (i + 1).min(CALIBRATION_GRID - 1);
+    let t = x - i as f64;
+    curve[i] * (1.0 - t) + curve[j] * t
+}
+
+/// Line-vote flip gate (v5): deterministic asc/desc line votes at a cardinal
+/// axis. Kept as a helper so the glyph gate can fall back to it when too few
+/// glyphs voted.
+fn vote_flip_gate(features: &[f64], flip_p: f64) -> (f64, f64) {
+    let n_lines = features.get(N_LINES_INDEX).copied().unwrap_or(0.0);
+    let vote_frac = features.get(VOTE_FRAC_INDEX).copied().unwrap_or(0.5);
+    if n_lines >= FLIP_NLINES_MIN {
+        let margin = (vote_frac - 0.5).abs();
+        if margin > VOTE_TIE_EPS {
+            let flip = if vote_frac < 0.5 { 1.0 } else { 0.0 };
+            (flip, vote_conf(margin))
         } else {
+            // Tie band: line votes are ambiguous; defer to the (retrained)
+            // flip head and report its own confidence.
             let f = if flip_p >= 0.5 { 1.0 } else { 0.0 };
             (f, flip_p.max(1.0 - flip_p))
         }
     } else {
         let f = if flip_p >= 0.5 { 1.0 } else { 0.0 };
         (f, flip_p.max(1.0 - flip_p))
+    }
+}
+
+/// Per-glyph flip gate: sum of per-glyph logistic log-odds, calibrated to a
+/// page-level P(flipped). Confidence is the probability the flip decision is
+/// correct, max(P, 1-P) in [0.5, 1] — already calibrated, so the generic
+/// isotonic confidence curve is NOT applied on top of it.
+fn glyph_flip_gate(ev: &GlyphEvidence) -> (f64, f64) {
+    let z = GLYPH_CAL_B0 + GLYPH_CAL_B1 * ev.sum_logodds + GLYPH_CAL_B2 * ev.count;
+    let p_flip = sigmoid(z);
+    let flip = if p_flip >= 0.5 { 1.0 } else { 0.0 };
+    let conf = p_flip.max(1.0 - p_flip);
+    (flip, conf)
+}
+
+pub fn combine_rotation(features: &[f64], preds: &[f64], tau: f64) -> RotationDecision {
+    combine_rotation_calibrated(features, preds, tau, None, None)
+}
+
+pub fn combine_rotation_calibrated(
+    features: &[f64],
+    preds: &[f64],
+    tau: f64,
+    calibration: Option<&[f64]>,
+    glyph: Option<GlyphEvidence>,
+) -> RotationDecision {
+    let boundary_visible = features.get(BOUNDARY_VISIBLE_INDEX).copied().unwrap_or(0.0);
+    let boundary_axis = features
+        .get(BOUNDARY_LONG_EDGE_INDEX)
+        .copied()
+        .unwrap_or_else(|| features[RADON_AXIS_INDEX]);
+    let docstrum_conc = features.get(DOCSTRUM_CONC_INDEX).copied().unwrap_or(0.0);
+    let docstrum_axis = features
+        .get(DOCSTRUM_MEAN_INDEX)
+        .map(|m| (m + core::f64::consts::FRAC_PI_2).rem_euclid(core::f64::consts::PI))
+        .unwrap_or_else(|| features[RADON_AXIS_INDEX]);
+
+    // v0.4.0 behaviour: the deterministic radon axis is the answer; the
+    // boundary/docstrum estimates are REPORTED as agreement votes only. A
+    // v0.5.0 "consensus override" let boundary+docstrum flip the radon axis
+    // on 90/270 rotated born-digital invoices (sideways pages read as upright
+    // at high confidence, not flagged) — feedback.txt section 2's dangerous
+    // failure mode. Do not override the radon axis here.
+    let axis_rad = features[RADON_AXIS_INDEX];
+
+    let mut axis_deg = axis_rad.to_degrees().rem_euclid(180.0);
+    // Fold-snap: the mod-180 axis is blind to the 0/180 fold. The S2 fine
+    // axis drifts up to ~0.45 deg on true-0 pages, so a 0.25 band lets those
+    // escape and report as 179.6 deg (accepted-flip + cardinal-pm1 misses).
+    // Snap at 0.75 deg: the gate skips |t|<=0.5 tilts and a real 1.0 deg tilt
+    // resolves to ~0.93 deg, so this band stays clear of true small tilts.
+    if axis_deg < 0.75 || axis_deg > 179.25 {
+        axis_deg = 0.0;
+    }
+    let flip_p = preds[5];
+    let trust_p = preds[6];
+
+    // v5 flip gate: at a cardinal axis the deterministic textline evidence is
+    // primary — it is the one signal independent of the GBDT flip head. The
+    // per-glyph shape evidence overrides the line-vote gate when enough
+    // glyphs voted: it is the only channel that works for all-caps/digit
+    // invoices whose asc/desc ink mass is ~0 (vote_frac is a coin flip there).
+    // Both gates derive confidence from evidence strength, never a constant
+    // 1.0, so weak evidence lowers confidence and needs_review fires instead
+    // of reporting a confident wrong answer.
+    // S4: S3 deskews the mask at the refined fine axis for ANY tilt, so the
+    // deterministic glyph/line-vote gates (previously cardinal-only) apply
+    // everywhere; the GBDT flip head is the tie-band fallback and the
+    // disagreement cross-check below, never the primary off-cardinal signal.
+    let glyph_gate_active = matches!(glyph, Some(ev) if ev.count >= GLYPH_COUNT_MIN);
+    let (flip, flip_conf) = match glyph {
+        Some(ev) if ev.count >= GLYPH_COUNT_MIN => glyph_flip_gate(&ev),
+        _ => vote_flip_gate(features, flip_p),
     };
 
     let rotation_deg = (180.0 - axis_deg).rem_euclid(180.0) + 180.0 * flip;
-    let confidence = trust_p * flip_conf;
-    let needs_review = confidence < tau || preds[0] < 0.5;
-    (rotation_deg, confidence, needs_review)
+    let raw_confidence = trust_p * flip_conf;
+    let confidence = match calibration {
+        Some(curve) => calibrate_confidence(raw_confidence, curve),
+        None => raw_confidence,
+    };
+    // Cross-check: the per-glyph shape gate and the GBDT flip head are
+    // independent flip signals. On the fatura2 gold split they agree 999/1000;
+    // the single disagreement is the single glyph-gate miss, which the GBDT
+    // head gets right. Route any glyph/GBDT disagreement to review rather than
+    // trusting the weaker per-glyph signal alone.
+    let gbdt_flip = if flip_p >= 0.5 { 1.0 } else { 0.0 };
+    let glyph_gbdt_disagrees = glyph_gate_active && flip != gbdt_flip;
+    let needs_review = confidence < tau || preds[0] < 0.5 || glyph_gbdt_disagrees;
+
+    // Flip-vote counts and agreement: n_lines is the vote count; the winning
+    // side's fraction is the agreement, so a tie is 0.5 and unanimity is 1.0.
+    let flip_vote_count = features.get(N_LINES_INDEX).copied().unwrap_or(0.0);
+    let vote_frac = features.get(VOTE_FRAC_INDEX).copied().unwrap_or(0.5);
+    let flip_vote_agreement = vote_frac.max(1.0 - vote_frac);
+
+    // Axis agreement: count the independent axis estimates available and how
+    // many agree with the chosen radon axis. Radon itself always counts; the
+    // boundary long-edge is a second estimate when the page boundary is
+    // visible; the docstrum inter-row link direction (rotated 90deg to the
+    // text axis) is a third when it is concentrated enough to be meaningful.
+    let mut axis_vote_count = 1.0f64;
+    let mut axis_agreement = 1.0f64;
+    if boundary_visible >= 0.5 {
+        axis_vote_count += 1.0;
+        if axis_err_rad(boundary_axis, axis_rad) <= AXIS_AGREE_TOLERANCE_RAD {
+            axis_agreement += 1.0;
+        }
+    }
+    if docstrum_conc >= DOCSTRUM_CONCENTRATION_MIN {
+        axis_vote_count += 1.0;
+        if axis_err_rad(docstrum_axis, axis_rad) <= AXIS_AGREE_TOLERANCE_RAD {
+            axis_agreement += 1.0;
+        }
+    }
+
+    let (glyph_count, glyph_logodds) = match glyph {
+        Some(ev) => (ev.count, ev.sum_logodds),
+        None => (0.0, 0.0),
+    };
+
+    // S5: split the decision for callers that want to run their own deskew.
+    // `quarter` is the nearest multiple of 90; `skew_deg` is the signed deskew
+    // residual in (-45, 45] the caller applies after `quarter`
+    // (rotate(quarter) then rotate(skew_deg) == rotate(-rotation_deg) for the
+    // small-residual case the field is meant for). q keeps the unwrapped 360
+    // so rotation_deg near 0/360 yields skew +t instead of +t-360.
+    let q = (rotation_deg / 90.0).round() * 90.0;
+    let quarter = q % 360.0;
+    let skew_deg = q - rotation_deg;
+    let flip_ok = flip_conf >= tau && !glyph_gbdt_disagrees;
+    let axis_ok = trust_p >= tau;
+
+    RotationDecision {
+        rotation_deg,
+        confidence,
+        needs_review,
+        quarter,
+        skew_deg,
+        axis_ok,
+        flip_ok,
+        flip_vote_count,
+        flip_vote_agreement,
+        axis_vote_count,
+        axis_agreement: axis_agreement / axis_vote_count,
+        glyph_count,
+        glyph_logodds,
+    }
 }
 
 /// A single node in a GBDT tree (XGBoost JSON dump format).
@@ -150,13 +376,21 @@ pub struct Model {
 /// A model manifest: label names + the pinned operating point + the forest.
 ///
 /// This is the v3 `model.json` shape written by `train_model_v2.py`:
-/// `{"labels": [...], "tau": 0.9, "trees": [[...], ...], "trees_per_label": [...]}`.
-/// The legacy flat tree array is also accepted for backward compatibility.
+/// `{"labels": [...], "tau": 0.9, "version": "0.4.0", "trees": [[...], ...], "trees_per_label": [...]}`.
+/// `version` is the release tag this model was built for (a semver string),
+/// not an internal format counter. The legacy flat tree array is also
+/// accepted for backward compatibility.
 #[derive(Clone, Debug)]
 pub struct ModelManifest {
     pub labels: Vec<String>,
     pub tau: f64,
-    pub version: Option<u32>,
+    pub version: Option<String>,
+    pub confidence_calibration: Option<Vec<f64>>,
+    /// Per-label decision thresholds for the 5 doc-trait heads, in label
+    /// order. Selected on the calibration split to maximize F1 (the rare
+    /// crumpled/shadow heads over-predict at a blanket 0.5). Defaults to 0.5
+    /// per label when absent.
+    pub label_thresholds: Option<Vec<f64>>,
     pub model: Model,
 }
 
@@ -180,7 +414,16 @@ enum ModelInput {
         #[serde(default)]
         trees_per_label: Option<Vec<usize>>,
         #[serde(default)]
-        version: Option<u32>,
+        version: Option<String>,
+        /// 21-value isotonic lookup table mapping raw confidence to the
+        /// empirical probability the rotation is correct. Absent on older
+        /// manifests (identity calibration).
+        #[serde(default)]
+        confidence_calibration: Option<Vec<f64>>,
+        /// Per-label doc-trait decision thresholds (index-aligned with labels).
+        /// Absent on older manifests (0.5 per label).
+        #[serde(default)]
+        label_thresholds: Option<Vec<f64>>,
     },
     Flat(Vec<Vec<RawNode>>),
 }
@@ -281,21 +524,39 @@ impl Model {
 
 impl ModelManifest {
     /// Parse the v3 manifest `{labels, tau, version, trees, trees_per_label}`
-    /// or a legacy flat tree array.
+    /// (where `version` is a release-tag string) or a legacy flat tree array.
     ///
     /// The legacy flat array carries no label names or tau; those callers must
     /// keep using `Model::from_xgboost_json(json, num_labels)` instead.
     pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
         let input: ModelInput = serde_json::from_str(json)?;
-        let (labels, tau, raw_trees, trees_per_label, version) = match input {
+        let (
+            labels,
+            tau,
+            raw_trees,
+            trees_per_label,
+            version,
+            confidence_calibration,
+            label_thresholds,
+        ) = match input {
             ModelInput::Manifest {
                 labels,
                 tau,
                 trees,
                 trees_per_label,
                 version,
-            } => (labels, tau, trees, trees_per_label, version),
-            ModelInput::Flat(trees) => (Vec::new(), default_tau(), trees, None, None),
+                confidence_calibration,
+                label_thresholds,
+            } => (
+                labels,
+                tau,
+                trees,
+                trees_per_label,
+                version,
+                confidence_calibration,
+                label_thresholds,
+            ),
+            ModelInput::Flat(trees) => (Vec::new(), default_tau(), trees, None, None, None, None),
         };
         if labels.is_empty() {
             return Err(serde_json::Error::custom(
@@ -308,8 +569,29 @@ impl ModelManifest {
             labels,
             tau,
             version,
+            confidence_calibration,
+            label_thresholds,
             model,
         })
+    }
+
+    /// Binarize the 5 doc-trait heads at their per-label thresholds (default
+    /// 0.5). Returns booleans index-aligned with the first 5 labels.
+    pub fn trait_labels(&self, features: &[f64]) -> Vec<bool> {
+        let preds = self.model.predict(features);
+        preds
+            .iter()
+            .enumerate()
+            .take(5)
+            .map(|(i, &p)| {
+                let t = self
+                    .label_thresholds
+                    .as_ref()
+                    .and_then(|v| v.get(i).copied())
+                    .unwrap_or(0.5);
+                p >= t
+            })
+            .collect()
     }
 }
 
@@ -540,12 +822,12 @@ mod tests {
             .expect("model_v3.json not found — run train_model_v2.py first");
         let manifest = ModelManifest::from_json(&json).expect("failed to parse model_v3.json");
 
-        assert_eq!(manifest.labels, LABELS_V2);
+        assert_eq!(manifest.labels, LABELS);
         assert!(manifest.tau.is_finite() && manifest.tau > 0.0);
         assert_eq!(
-            manifest.version,
-            Some(3),
-            "model_v3.json must carry version 3"
+            manifest.version.as_deref(),
+            Some("0.2.0"),
+            "model_v3.json must carry its release version 0.2.0"
         );
 
         // Per-label tree counts pinned by LABEL_PARAMS in train_model_v2.py.
@@ -560,43 +842,155 @@ mod tests {
     }
 
     #[test]
-    fn test_combine_rotation_v4_textline_gate() {
+    fn test_combine_rotation_v5_vote_gate() {
         let mut features = vec![0.0f64; 116];
-        features[RADON_AXIS_INDEX] = 0.0; // horizontal fold
+        features[RADON_AXIS_INDEX] = 0.0; // horizontal fold -> cardinal
         features[N_LINES_INDEX] = 16.0;
-        features[FLIP_SCORE_INDEX] = 0.38;
-        // GBDT says flipped (wrong) with high confidence; the gate overrides it.
+
+        // Strong line-vote for upright overrides a wrong high-confidence head.
+        features[VOTE_FRAC_INDEX] = 0.9;
         let preds = [1.0, 1.0, 0.0, 0.0, 0.0, 0.99, 1.0];
-        let (deg, conf, review) = combine_rotation(&features, &preds, 0.9);
-        assert!((deg - 0.0).abs() < 1e-9, "deg={deg}");
-        assert!((conf - 1.0).abs() < 1e-12, "conf={conf}");
-        assert!(!review);
+        let d = combine_rotation(&features, &preds, 0.9);
+        assert!(
+            (d.rotation_deg - 0.0).abs() < 1e-9,
+            "deg={}",
+            d.rotation_deg
+        );
+        assert!(
+            (d.confidence - 0.7777777777777778).abs() < 1e-9,
+            "conf={}",
+            d.confidence
+        );
+        assert!(
+            d.needs_review,
+            "margin 0.4 conf 0.778 < tau 0.9 must review"
+        );
+        assert!((d.flip_vote_count - 16.0).abs() < 1e-9);
+        assert!((d.flip_vote_agreement - 0.9).abs() < 1e-9);
 
-        // Flipped text: negative flip_score -> 180.
-        features[FLIP_SCORE_INDEX] = -0.38;
-        let (deg, _, _) = combine_rotation(&features, &preds, 0.9);
-        assert!((deg - 180.0).abs() < 1e-9, "deg={deg}");
+        // Strong vote for flipped -> 180.
+        features[VOTE_FRAC_INDEX] = 0.1;
+        let d = combine_rotation(&features, &preds, 0.9);
+        assert!(
+            (d.rotation_deg - 180.0).abs() < 1e-9,
+            "deg={}",
+            d.rotation_deg
+        );
+        assert!((d.flip_vote_agreement - 0.9).abs() < 1e-9);
 
-        // Weak evidence on born-digital text defaults upright instead of
-        // trusting the GBDT flip head.
-        features[FLIP_SCORE_INDEX] = 0.01;
-        let (deg, _, _) = combine_rotation(&features, &preds, 0.9);
-        assert!((deg - 0.0).abs() < 1e-9, "deg={deg}");
+        // Tie band defers to the head and reports head confidence.
+        features[VOTE_FRAC_INDEX] = 0.5;
+        let d = combine_rotation(&features, &preds, 0.9);
+        assert!(
+            (d.rotation_deg - 180.0).abs() < 1e-9,
+            "deg={}",
+            d.rotation_deg
+        );
+        assert!((d.confidence - 0.99).abs() < 1e-12, "conf={}", d.confidence);
+        assert!(!d.needs_review, "head conf 0.99 >= tau 0.9");
+        assert!((d.flip_vote_agreement - 0.5).abs() < 1e-9);
 
-        // Born-digital with a negative ink-mass score but a line-vote majority
-        // for upright stays upright.
-        features[FLIP_SCORE_INDEX] = -0.2;
+        // Weak non-tie vote -> low confidence, needs_review fires.
         features[VOTE_FRAC_INDEX] = 0.6;
-        let (deg, _, _) = combine_rotation(&features, &preds, 0.9);
-        assert!((deg - 0.0).abs() < 1e-9, "deg={deg}");
+        let d = combine_rotation(&features, &preds, 0.9);
+        assert!(
+            (d.rotation_deg - 0.0).abs() < 1e-9,
+            "deg={}",
+            d.rotation_deg
+        );
+        assert!(
+            (d.confidence - 0.1111111111111111).abs() < 1e-9,
+            "conf={}",
+            d.confidence
+        );
+        assert!(d.needs_review);
+    }
 
-        // All-caps/digits born-digital stays upright even when both textline
-        // signals point the wrong way (no reliable ascender/descender mass).
-        features[FLIP_SCORE_INDEX] = -0.3;
-        features[VOTE_FRAC_INDEX] = 0.4;
-        features[BODY_FRAC_INDEX] = 0.93;
-        let (deg, _, _) = combine_rotation(&features, &preds, 0.9);
-        assert!((deg - 0.0).abs() < 1e-9, "deg={deg}");
+    #[test]
+    fn test_combine_rotation_glyph_gate() {
+        let mut features = vec![0.0f64; 116];
+        features[RADON_AXIS_INDEX] = 0.0; // horizontal fold -> cardinal
+        features[N_LINES_INDEX] = 16.0;
+        features[VOTE_FRAC_INDEX] = 0.5; // line votes would defer to head
+        let preds = [1.0, 1.0, 0.0, 0.0, 0.0, 0.99, 1.0];
+
+        // Baked calibration consts: P(flipped) = sigmoid(b0 + b1*L + b2*N),
+        // confidence = trust * max(P, 1-P). With L=3.7, N=20 the evidence is
+        // clearly flipped, so the gate rounds to 1 and echoes the glyph
+        // evidence; its calibrated confidence (not the head's 0.99) decides
+        // needs_review. Recompute the expected confidence from the constants
+        // so the test stays correct for any baked values.
+        let ev = GlyphEvidence {
+            sum_logodds: 3.7,
+            count: 20.0,
+        };
+        let d = combine_rotation_calibrated(&features, &preds, 0.9, None, Some(ev));
+        let z = GLYPH_CAL_B0 + GLYPH_CAL_B1 * ev.sum_logodds + GLYPH_CAL_B2 * ev.count;
+        let p_flip = sigmoid(z);
+        let expected_conf = preds[6] * p_flip.max(1.0 - p_flip);
+        assert!(
+            (d.rotation_deg - 180.0).abs() < 1e-9,
+            "deg={}",
+            d.rotation_deg
+        );
+        assert!((d.glyph_count - 20.0).abs() < 1e-9);
+        assert!((d.glyph_logodds - 3.7).abs() < 1e-9);
+        assert!(
+            (d.confidence - expected_conf).abs() < 1e-9,
+            "conf={} expected={}",
+            d.confidence,
+            expected_conf
+        );
+        assert!(d.needs_review, "glyph conf {:.3} < tau 0.9", d.confidence);
+
+        // Few glyphs -> falls back to the line-vote gate (head defer here).
+        let ev = GlyphEvidence {
+            sum_logodds: 3.7,
+            count: 2.0,
+        };
+        let d = combine_rotation_calibrated(&features, &preds, 0.9, None, Some(ev));
+        assert!(
+            (d.rotation_deg - 180.0).abs() < 1e-9,
+            "deg={}",
+            d.rotation_deg
+        );
+        assert!((d.glyph_count - 2.0).abs() < 1e-9);
+        assert!((d.confidence - 0.99).abs() < 1e-12, "conf={}", d.confidence);
+        assert!(!d.needs_review, "head conf 0.99 >= tau 0.9");
+
+        // Glyph/GBDT disagreement routes to review even when the glyph gate's
+        // own confidence clears tau: the two independent flip signals must
+        // agree, or the decision is flagged for a human. Here glyph says
+        // flipped (L=6, N=40 -> P(flip) ~ 0.94) but the GBDT head says
+        // upright (0.1); the answer stays glyph's (rotation 180) and only
+        // needs_review is forced.
+        let ev = GlyphEvidence {
+            sum_logodds: 6.0,
+            count: 40.0,
+        };
+        let preds_disagree = [1.0, 1.0, 0.0, 0.0, 0.0, 0.1, 1.0];
+        let d = combine_rotation_calibrated(&features, &preds_disagree, 0.9, None, Some(ev));
+        let z = GLYPH_CAL_B0 + GLYPH_CAL_B1 * 6.0 + GLYPH_CAL_B2 * 40.0;
+        let p_flip = sigmoid(z);
+        let expected_conf = 1.0 * p_flip.max(1.0 - p_flip);
+        assert!(
+            expected_conf >= 0.9,
+            "test needs glyph conf >= tau: {expected_conf}"
+        );
+        assert!(
+            (d.confidence - expected_conf).abs() < 1e-9,
+            "conf={}",
+            d.confidence
+        );
+        assert!(
+            (d.rotation_deg - 180.0).abs() < 1e-9,
+            "deg={}",
+            d.rotation_deg
+        );
+        assert!(
+            d.needs_review,
+            "glyph/GBDT disagreement must force review despite conf {expected_conf:.3} >= tau"
+        );
     }
 
     #[test]
@@ -606,27 +1000,120 @@ mod tests {
         features[RADON_AXIS_INDEX] = 17.0_f64.to_radians();
 
         let preds = [0.9, 0.0, 0.0, 0.0, 0.0, 0.1, 0.8];
-        let (deg, conf, review) = combine_rotation(&features, &preds, 0.9);
-        assert!((deg - 163.0).abs() < 1e-9, "deg={deg}");
-        assert!((conf - 0.8 * 0.9).abs() < 1e-12, "conf={conf}");
-        assert!(review, "conf 0.72 < tau 0.9 must review");
+        let d = combine_rotation(&features, &preds, 0.9);
+        assert!(
+            (d.rotation_deg - 163.0).abs() < 1e-9,
+            "deg={}",
+            d.rotation_deg
+        );
+        assert!(
+            (d.confidence - 0.8 * 0.9).abs() < 1e-12,
+            "conf={}",
+            d.confidence
+        );
+        assert!(d.needs_review, "conf 0.72 < tau 0.9 must review");
 
         // flip=1 -> rotation = 163 + 180 = 343.
         let preds = [1.0, 0.0, 0.0, 0.0, 0.0, 0.9, 1.0];
-        let (deg, conf, review) = combine_rotation(&features, &preds, 0.5);
-        assert!((deg - 343.0).abs() < 1e-9, "deg={deg}");
-        assert!((conf - 0.9).abs() < 1e-12, "conf={conf}");
-        assert!(!review, "conf 0.9 >= tau 0.5 and is_document");
+        let d = combine_rotation(&features, &preds, 0.5);
+        assert!(
+            (d.rotation_deg - 343.0).abs() < 1e-9,
+            "deg={}",
+            d.rotation_deg
+        );
+        assert!((d.confidence - 0.9).abs() < 1e-12, "conf={}", d.confidence);
+        assert!(!d.needs_review, "conf 0.9 >= tau 0.5 and is_document");
 
         // Not a document -> review regardless of confidence.
         let preds = [0.1, 0.0, 0.0, 0.0, 0.0, 0.9, 1.0];
-        let (_, _, review) = combine_rotation(&features, &preds, 0.0);
-        assert!(review, "not is_document must force review");
+        let d = combine_rotation(&features, &preds, 0.0);
+        assert!(d.needs_review, "not is_document must force review");
 
         // axis exactly 0, flip=0 -> rotation = 0 (upright).
         features[RADON_AXIS_INDEX] = 0.0;
         let preds = [1.0, 0.0, 0.0, 0.0, 0.0, 0.1, 1.0];
-        let (deg, _, _) = combine_rotation(&features, &preds, 0.5);
-        assert!((deg - 0.0).abs() < 1e-9, "deg={deg}");
+        let d = combine_rotation(&features, &preds, 0.5);
+        assert!(
+            (d.rotation_deg - 0.0).abs() < 1e-9,
+            "deg={}",
+            d.rotation_deg
+        );
+    }
+
+    #[test]
+    fn test_axis_agreement_counts() {
+        // radon 30deg; boundary 35deg (agrees within 10deg); docstrum link
+        // direction 120deg -> text axis 30deg (agrees), concentrated.
+        let mut features = vec![0.0f64; 116];
+        features[RADON_AXIS_INDEX] = 30.0_f64.to_radians();
+        features[N_LINES_INDEX] = 12.0;
+        features[VOTE_FRAC_INDEX] = 0.8;
+        features[BOUNDARY_VISIBLE_INDEX] = 1.0;
+        features[BOUNDARY_LONG_EDGE_INDEX] = 35.0_f64.to_radians();
+        features[DOCSTRUM_CONC_INDEX] = 0.7;
+        features[DOCSTRUM_MEAN_INDEX] = 120.0_f64.to_radians();
+        let preds = [1.0, 0.0, 0.0, 0.0, 0.0, 0.1, 1.0];
+        let d = combine_rotation(&features, &preds, 0.5);
+        assert!(
+            (d.axis_vote_count - 3.0).abs() < 1e-9,
+            "votes={}",
+            d.axis_vote_count
+        );
+        assert!(
+            (d.axis_agreement - 1.0).abs() < 1e-9,
+            "agree={}",
+            d.axis_agreement
+        );
+
+        // boundary disagrees (80deg vs 30) and docstrum is diffuse -> only
+        // radon + boundary count; agreement = 1/2.
+        features[BOUNDARY_LONG_EDGE_INDEX] = 80.0_f64.to_radians();
+        features[DOCSTRUM_CONC_INDEX] = 0.2;
+        let d = combine_rotation(&features, &preds, 0.5);
+        assert!(
+            (d.axis_vote_count - 2.0).abs() < 1e-9,
+            "votes={}",
+            d.axis_vote_count
+        );
+        assert!(
+            (d.axis_agreement - 0.5).abs() < 1e-9,
+            "agree={}",
+            d.axis_agreement
+        );
+    }
+
+    #[test]
+    fn test_calibrate_confidence() {
+        // identity curve: bin i = i/20, so calibrate(raw) ~ raw.
+        let identity: Vec<f64> = (0..21).map(|i| i as f64 / 20.0).collect();
+        assert!((calibrate_confidence(0.37, &identity) - 0.37).abs() < 1e-9);
+        // clamps out-of-range raw values
+        assert!((calibrate_confidence(-1.0, &identity) - 0.0).abs() < 1e-9);
+        assert!((calibrate_confidence(2.0, &identity) - 1.0).abs() < 1e-9);
+        // malformed curve is identity
+        assert!((calibrate_confidence(0.6, &[0.0, 1.0]) - 0.6).abs() < 1e-9);
+        // constant curve maps everything to its constant
+        let zeros = vec![0.0; 21];
+        assert!((calibrate_confidence(0.9, &zeros) - 0.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_combine_rotation_calibration_applied() {
+        // axis 17 deg, non-cardinal -> flip from head p=0.9, trust=0.8 ->
+        // raw confidence 0.8*0.9 = 0.72. A curve that maps 0.72 -> 0.95 lifts
+        // the decision above tau 0.9 and flips needs_review off.
+        let mut features = vec![0.0f64; 116];
+        features[RADON_AXIS_INDEX] = 17.0_f64.to_radians();
+        let preds = [1.0, 0.0, 0.0, 0.0, 0.0, 0.9, 0.8];
+        let d = combine_rotation(&features, &preds, 0.9);
+        assert!((d.confidence - 0.72).abs() < 1e-12);
+        assert!(d.needs_review, "raw 0.72 < tau 0.9");
+
+        let mut curve = vec![0.0; 21];
+        curve[14] = 0.95; // bin 14 = 0.70
+        curve[15] = 0.95; // bin 15 = 0.75 -> interpolates to 0.95 at 0.72
+        let d = combine_rotation_calibrated(&features, &preds, 0.9, Some(&curve), None);
+        assert!((d.confidence - 0.95).abs() < 1e-12, "conf={}", d.confidence);
+        assert!(!d.needs_review, "calibrated 0.95 >= tau 0.9");
     }
 }

@@ -1,7 +1,7 @@
 use crate::pixel_at;
 use alloc::vec;
 use alloc::vec::Vec;
-use libm::{cos, log2, sqrt};
+use libm::{log2, sqrt};
 
 // ---------------------------------------------------------------------------
 // 2c-a: Block-wise 8×8 DCT energy
@@ -47,29 +47,97 @@ pub fn dct_low_freq_ratio(gray: &[f64], width: usize, height: usize) -> f64 {
 
 /// 8×8 DCT-II on `block` (row-major). `block` is used as scratch space for
 /// the 1D DCT, then the 8×8 output replaces it.
+/// DCT-II cosine basis C[k][n] = cos(pi/8 * (n + 0.5) * k), row-major 8x8.
+/// Precomputed once: the old code called libm::cos ~4.2M times per 512px image
+/// (64x64 blocks x 8x8 x 2 passes), which dominated extract_core.
+const DCT_COS: [f64; 64] = [
+    1.0000000000,
+    1.0000000000,
+    1.0000000000,
+    1.0000000000,
+    1.0000000000,
+    1.0000000000,
+    1.0000000000,
+    1.0000000000,
+    0.9807852804,
+    0.8314696123,
+    0.5555702330,
+    0.1950903220,
+    -0.1950903220,
+    -0.5555702330,
+    -0.8314696123,
+    -0.9807852804,
+    0.9238795325,
+    0.3826834324,
+    -0.3826834324,
+    -0.9238795325,
+    -0.9238795325,
+    -0.3826834324,
+    0.3826834324,
+    0.9238795325,
+    0.8314696123,
+    -0.1950903220,
+    -0.9807852804,
+    -0.5555702330,
+    0.5555702330,
+    0.9807852804,
+    0.1950903220,
+    -0.8314696123,
+    0.7071067812,
+    -0.7071067812,
+    -0.7071067812,
+    0.7071067812,
+    0.7071067812,
+    -0.7071067812,
+    -0.7071067812,
+    0.7071067812,
+    0.5555702330,
+    -0.9807852804,
+    0.1950903220,
+    0.8314696123,
+    -0.8314696123,
+    -0.1950903220,
+    0.9807852804,
+    -0.5555702330,
+    0.3826834324,
+    -0.9238795325,
+    0.9238795325,
+    -0.3826834324,
+    -0.3826834324,
+    0.9238795325,
+    -0.9238795325,
+    0.3826834324,
+    0.1950903220,
+    -0.5555702330,
+    0.8314696123,
+    -0.9807852804,
+    0.9807852804,
+    -0.8314696123,
+    0.5555702330,
+    -0.1950903220,
+];
+
 fn dct_8x8(block: &[f64; 64], _stride: usize) -> [f64; 64] {
     let mut tmp = [0.0f64; 64];
     let mut out = [0.0f64; 64];
 
-    // DCT on rows
+    // DCT on rows: tmp[j*8+k] = sum_n block[j*8+n] * C[k*8+n]
     for j in 0..8 {
         for k in 0..8 {
             let mut sum = 0.0;
             for n in 0..8 {
-                sum += block[j * 8 + n]
-                    * cos(core::f64::consts::PI / 8.0 * (n as f64 + 0.5) * k as f64);
+                sum += block[j * 8 + n] * DCT_COS[k * 8 + n];
             }
             tmp[j * 8 + k] = sum;
         }
     }
 
-    // DCT on columns
+    // DCT on columns: out[k*8+i] = sum_n tmp[n*8+i] * C[k*8+n]
     for i in 0..8 {
         for k in 0..8 {
             let mut sum = 0.0;
             for n in 0..8 {
-                sum +=
-                    tmp[n * 8 + i] * cos(core::f64::consts::PI / 8.0 * (n as f64 + 0.5) * k as f64);
+                sum += tmp[n * 8 + i] * DCT_COS[k * 8 + n];
             }
             out[k * 8 + i] = sum;
         }

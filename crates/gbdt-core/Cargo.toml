@@ -1,6 +1,6 @@
 [package]
 name = "gbdt-core"
-version = "0.3.0"
+version = "0.5.3"
 edition = "2021"
 description = "XGBoost GBDT manifest + per-degree rotation combine shared by wasm-bridge and py-features"
 license = "MIT"

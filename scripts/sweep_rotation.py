@@ -19,7 +19,7 @@ from PIL import Image
 
 MAX_LONG_EDGE = 512
 BORDER_FILL_WIDTH = 4
-V2_FEAT_COUNT = 116
+FEAT_COUNT = 124
 RADON_AXIS_INDEX = 100
 
 
@@ -58,8 +58,8 @@ def sweep_one(args):
             )
         rw, rh = rotated.size
         pixels = np.array(rotated, dtype=np.uint8).tobytes()
-        feats = py_features.extract_all_v2(pixels, rw, rh)
-        assert len(feats) == V2_FEAT_COUNT, f"{fname}: {len(feats)} feats"
+        feats = py_features.extract_all(pixels, rw, rh)
+        assert len(feats) == FEAT_COUNT, f"{fname}: {len(feats)} feats"
         feats_list.append(feats)
         angle_list.append(angle)
     return (

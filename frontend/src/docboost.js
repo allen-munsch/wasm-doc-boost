@@ -8,7 +8,7 @@
 //
 // Init is once. analyze is per-document.
 
-import init, { load_model_v2, classify_file_v2, classifyPdf, extractTextWithPositions, scan_pii } from '../wasm_bridge.js';
+import init, { load_model, classify_file, classifyPdf, extractTextWithPositions, scan_pii } from '../wasm_bridge.js';
 import { ClassifySchema, PdfClassifySchema, PdfTextItemSchema, PiiHitSchema } from './schemas.js';
 import { normalizeTesseract, normalizeGlmOcr } from './normalize.js';
 import { mergeRegions } from './merge.js';
@@ -48,7 +48,7 @@ export async function createDocBoost(config, onProgress) {
     try {
         var resp = await fetch(config.modelPath);
         if (!resp.ok) throw new Error('HTTP ' + resp.status + ' fetching model.json');
-        load_model_v2(await resp.text());
+        load_model(await resp.text());
         report('wasm', 'ok', 'Model loaded');
     } catch (e) {
         report('wasm', 'err', 'Model load: ' + (e.message || String(e)));
@@ -130,7 +130,7 @@ export async function createDocBoost(config, onProgress) {
         // ── Step 1: Classification (sync, fast) ──
         var classification = null;
         try {
-            classification = ClassifySchema.parse(classify_file_v2(bytes));
+            classification = ClassifySchema.parse(classify_file(bytes));
         } catch (e) {
             report('classify', 'err', e.message || String(e));
         }

@@ -133,7 +133,7 @@ Every engine output normalizes to this flat structure:
 ```js
 const prov = provenance(doc);
 // {
-//   engine: "wasm-doc-boost 0.3.0",
+//   engine: "wasm-doc-boost 0.4.0",
 //   tesseract: { version: "5.4.0", oem: "LSTM_ONLY", psm: "AUTO" },
 //   glmOcr: { backend: "GLM-OCR (cuda)" },
 //   analysisMs: 1523,

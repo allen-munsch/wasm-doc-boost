@@ -12,12 +12,11 @@ const N = parseInt(process.argv[2] || '1000', 10);
 const START = parseInt(process.argv[3] || '0', 10);
 
 const wasmBytes = readFileSync(resolve(ROOT, 'frontend/wasm_bridge_bg.wasm'));
-const { initSync, classify_file_v2, load_model_v2, model_version } = await import(
+const { initSync, classify_file, load_model } = await import(
   resolve(ROOT, 'frontend/wasm_bridge.js')
 );
 initSync(new WebAssembly.Module(wasmBytes));
-load_model_v2(readFileSync(resolve(ROOT, 'data/model_v4.json'), 'utf-8'));
-if (model_version() !== 4) throw new Error(`expected model v4, got ${model_version()}`);
+load_model(readFileSync(resolve(ROOT, 'data/model.json'), 'utf-8'));
 
 function circularErr(a, b, period = 360) {
   const d = Math.abs(a - b);
@@ -27,13 +26,14 @@ const mean = (a) => a.reduce((x, y) => x + y, 0) / a.length;
 const frac = (a) => a.filter(Boolean).length / a.length;
 
 const errs = [], axisErrs = [], confs = [];
-let n = 0, nDoc = 0, notDoc = 0, review = 0, flipErr = 0;
+const acceptedErrs = [];
+let n = 0, nDoc = 0, notDoc = 0, review = 0, flipErr = 0, accepted = 0, acceptedFlip = 0;
 const dist = {};
 
 for (let i = START; i < START + N; i++) {
   const fn = `fatura2_test_${i}.jpg`;
   const bytes = readFileSync(resolve(ROOT, 'data/images/fatura2', fn));
-  const r = classify_file_v2(bytes);
+  const r = classify_file(bytes);
   n++;
   const isDoc = r.is_document >= 0.5;
   if (isDoc) nDoc++; else notDoc++;
@@ -44,6 +44,11 @@ for (let i = START; i < START + N; i++) {
   axisErrs.push(ae);
   confs.push(r.rotation_confidence);
   if (r.needs_review) review++;
+  else {
+    accepted++;
+    acceptedErrs.push(e);
+    if (e > 90) acceptedFlip++;
+  }
   if (e > 90) flipErr++;
   const b = Math.round(deg);
   dist[b] = (dist[b] || 0) + 1;
@@ -68,6 +73,9 @@ console.log(JSON.stringify({
   axis_pm1_accuracy: +frac(axisErrs.map((e) => e <= 1)).toFixed(4),
   flip_error_rate_strict: +(flipErr / n).toFixed(4),
   needs_review_rate: +(review / n).toFixed(4),
+  accepted_flip_rate: accepted > 0 ? +(acceptedFlip / accepted).toFixed(4) : 0,
+  accepted_circular_mae_deg: accepted > 0 ? +mean(acceptedErrs).toFixed(3) : 0,
+  accepted_n: accepted,
   mean_confidence: +mean(confs).toFixed(3),
   rotation_deg_distribution: Object.keys(dist).sort((a, b) => a - b).map((k) => [k, dist[k]]),
 }, null, 1));

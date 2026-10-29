@@ -48,7 +48,7 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Smoke test wheel (legacy + v3 parity)
+      - name: Smoke test wheel (current API)
         if: matrix.target == ''
         working-directory: crates/py-features
         shell: bash
@@ -56,37 +56,33 @@ jobs:
           set -euo pipefail
           python -m pip install --no-index --find-links dist py-features
           python - <<'PY'
+          import json
           import py_features
 
           # Release build flag
           assert py_features.is_release_build() is True
 
-          # Legacy feature vector (103)
-          assert len(py_features.extract_all(bytes(3), 1, 1)) == 103
+          # Current feature vector is 124 (the legacy 103/9-label API is gone)
+          assert len(py_features.extract_all(bytes(3), 1, 1)) == 124
 
-          # Per-degree feature vector (116) — the shared core path
-          assert len(py_features.extract_all_v2(bytes(64 * 64 * 3), 64, 64)) == 116
-
-          # v3 model parity: load the manifest, predict on the same pixels,
-          # get the same combine_rotation outputs the wasm frontend returns.
+          # Current model surface: load_model + predict return the same
+          # combine_rotation outputs the wasm frontend returns.
           manifest = {
               "labels": ["is_document", "is_digital", "is_paper", "is_crumpled",
                           "is_shadow", "flip", "trust"],
               "tau": 0.9,
-              "version": 3,
+              "version": "0.5.3",
               "trees": [[{"nodeid": 0, "depth": 0, "leaf": 0.0}]] * 7,
               "trees_per_label": [1, 1, 1, 1, 1, 1, 1],
           }
-          import json
-          py_features.load_model_v2(json.dumps(manifest))
-          assert py_features.model_version() == 3
+          py_features.load_model(json.dumps(manifest))
 
-          result = py_features.predict_v2(bytes(64 * 64 * 3), 64, 64)
-          assert len(result) == 10, result.keys()
+          result = py_features.predict(bytes(64 * 64 * 3), 64, 64)
           assert "rotation_deg" in result
           assert "rotation_confidence" in result
           assert "needs_review" in result
-          print("wheel OK: legacy 103 + v3 116 + predict_v2 parity")
+          assert "trait_labels" in result
+          print("wheel OK: extract_all 124 + load_model/predict")
           PY
 
       - name: Verify cross-compiled wheel architecture

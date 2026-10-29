@@ -3,11 +3,8 @@
 export const memory: WebAssembly.Memory;
 export const bench_sobel: (a: number, b: number, c: number) => [number, number, number];
 export const classify_file: (a: number, b: number) => [number, number, number];
-export const classify_file_v2: (a: number, b: number) => [number, number, number];
 export const load_crf_model: (a: number, b: number) => [number, number];
 export const load_model: (a: number, b: number) => [number, number];
-export const load_model_v2: (a: number, b: number) => [number, number];
-export const model_version: () => number;
 export const scan_pii: (a: number, b: number) => [number, number, number];
 export const classifyPdf: (a: number, b: number) => [number, number, number];
 export const extractTextWithPositions: (a: number, b: number) => [number, number, number];

@@ -1,6 +1,6 @@
 [package]
 name = "py-features"
-version = "0.3.0"
+version = "0.5.3"
 edition = "2021"
 
 [lib]
@@ -17,3 +17,9 @@ ocr-core = { path = "../ocr-core" }
 pii-span-core = { path = "../pii-span-core" }
 layout-core = { path = "../layout-core" }
 image = "0.25"
+libloading = { version = "0.8", optional = true }
+
+[features]
+default = []
+# CUDA backend: dlopens libcuda.so.1 at runtime, embeds precompiled PTX.
+gpu = ["dep:libloading"]
