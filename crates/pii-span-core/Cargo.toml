@@ -1,6 +1,6 @@
 [package]
 name = "pii-span-core"
-version = "0.5.4"
+version = "0.5.5"
 edition = "2024"
 rust-version = "1.88"
 description = "Native Rust inference for GLiNER2 on ONNX Runtime (vendored from gliner2-rs 0.9.6)"

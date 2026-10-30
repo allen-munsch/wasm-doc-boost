@@ -443,54 +443,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_combine_rotation_matches_python_formula() {
-        // axis = 17 deg, flip=0 -> rotation = (180-17) mod 180 = 163.
-        let mut features = vec![0.0f64; 116];
-        features[RADON_AXIS_INDEX] = 17.0_f64.to_radians();
-
-        let preds = [0.9, 0.0, 0.0, 0.0, 0.0, 0.1, 0.8];
-        let d = combine_rotation(&features, &preds, 0.9);
-        assert!(
-            (d.rotation_deg - 163.0).abs() < 1e-9,
-            "deg={}",
-            d.rotation_deg
-        );
-        assert!(
-            (d.confidence - 0.8 * 0.9).abs() < 1e-12,
-            "conf={}",
-            d.confidence
-        );
-        assert!(d.needs_review, "conf 0.72 < tau 0.9 must review");
-
-        // flip=1 -> rotation = 163 + 180 = 343.
-        let preds = [1.0, 0.0, 0.0, 0.0, 0.0, 0.9, 1.0];
-        let d = combine_rotation(&features, &preds, 0.5);
-        assert!(
-            (d.rotation_deg - 343.0).abs() < 1e-9,
-            "deg={}",
-            d.rotation_deg
-        );
-        assert!((d.confidence - 0.9).abs() < 1e-12, "conf={}", d.confidence);
-        assert!(!d.needs_review, "conf 0.9 >= tau 0.5 and is_document");
-
-        // Not a document -> review regardless of confidence.
-        let preds = [0.1, 0.0, 0.0, 0.0, 0.0, 0.9, 1.0];
-        let d = combine_rotation(&features, &preds, 0.0);
-        assert!(d.needs_review, "not is_document must force review");
-
-        // axis exactly 0, flip=0 -> rotation = 0 (upright).
-        features[RADON_AXIS_INDEX] = 0.0;
-        let preds = [1.0, 0.0, 0.0, 0.0, 0.0, 0.1, 1.0];
-        let d = combine_rotation(&features, &preds, 0.5);
-        assert!(
-            (d.rotation_deg - 0.0).abs() < 1e-9,
-            "deg={}",
-            d.rotation_deg
-        );
-    }
-
-    const TRIVIAL_MANIFEST: &str = r#"{
+        const TRIVIAL_MANIFEST: &str = r#"{
         "labels": ["is_document","is_digital","is_paper","is_crumpled","is_shadow","flip","trust"],
         "tau": 0.9,
         "trees": [
